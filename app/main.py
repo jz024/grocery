@@ -3,7 +3,7 @@ from typing import Optional, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
-import openai
+from openai import OpenAI
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -14,18 +14,18 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
 
-openai.api_key = OPENAI_API_KEY
+OpenAI.api_key = OPENAI_API_KEY
 
 app = FastAPI()
 
-client = MongoClient(MONGODB_URI)
-db = client.grocerydb
-stores_collection = db.stores
+# client = MongoClient(MONGODB_URI)
+# db = client.grocerydb
+# stores_collection = db.stores
 
-try:
-    print(client.list_database_names())
-except Exception as e:
-    print("Connection error:", e)
+# try:
+#     print(client.list_database_names())
+# except Exception as e:
+#     print("Connection error:", e)
 
 from pydantic import BaseModel
 from typing import Optional, List
@@ -80,7 +80,7 @@ def recommend_cheapest_store(request: ShoppingListRequest):
     
     store_summaries = []
     for place in nearby_data.get("places", []):
-        store_name = place.get("displayName", {}).get("text", "Unknown Store")
+        store_name = place.get("name", "Unknown Store")
         formatted_address = place.get("formattedAddress", "Address not available")
         website_uri = place.get("websiteUri", "Website not available")
         location = place.get("location", {})
@@ -143,9 +143,11 @@ def recommend_cheapest_store(request: ShoppingListRequest):
     please make the best guess.
     """
 
+    client = OpenAI()
+
     try:
-        completion = openai.ChatCompletion.create(
-            model="gpt-4o",
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a helpful grocery assistant."},
                 {"role": "user", "content": prompt}
@@ -156,6 +158,8 @@ def recommend_cheapest_store(request: ShoppingListRequest):
         recommendation_text = completion.choices[0].message.content.strip()
     except Exception as e:
         recommendation_text = f"Could not generate recommendation: {str(e)}"
+
+    print(recommendation_text)
 
     return {
         "shopping_list": items,
