@@ -56,11 +56,7 @@ from typing import Optional, List
 class ShoppingListRequest(BaseModel):
     latitude: float
     longitude: float
-    query: Optional[str] = "grocery_store" 
     items: List[str]
-
-    class Config:
-        extra = "ignore"
 
 @app.get("/")
 def read_root():
@@ -71,16 +67,15 @@ def read_root():
 def recommend_cheapest_store(request: ShoppingListRequest):
     lat, lon = request.latitude, request.longitude
     items = request.items
-    query = request.query 
 
     try:
-        nearby_data = fetch_nearby_stores(lat, lon, query)
+        nearby_data = fetch_nearby_stores(lat, lon)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch Google Places data: {str(e)}")
     
     store_summaries = []
     for place in nearby_data.get("places", []):
-        store_name = place.get("name", "Unknown Store")
+        store_name = place.get("displayName", "Unknown Store")
         formatted_address = place.get("formattedAddress", "Address not available")
         website_uri = place.get("websiteUri", "Website not available")
         location = place.get("location", {})
@@ -168,17 +163,17 @@ def recommend_cheapest_store(request: ShoppingListRequest):
     }
 
 
-def fetch_nearby_stores(lat: float, lon: float, included_type: str = "grocery_store", radius: float = 5000):
+def fetch_nearby_stores(lat: float, lon: float, radius: float = 5000):
     url = "https://places.googleapis.com/v1/places:searchNearby"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-        "X-Goog-FieldMask": "*"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.websiteUri,places.location"
     }
 
     payload = {
-        "includedTypes": ['grocery_store'],
-        "maxResultCount": 10,
+        "includedTypes": ["grocery_store", "asian_grocery_store", "food_store", "supermarket"],
+        "maxResultCount": 20,
         "locationRestriction": {
             "circle": {
                 "center": {
@@ -192,6 +187,10 @@ def fetch_nearby_stores(lat: float, lon: float, included_type: str = "grocery_st
 
     response = requests.post(url, json=payload, headers=headers)
     if response.status_code != 200:
-        raise HTTPException(status_code=500, detail="Error fetching Google Places data (new API)")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error fetching Google Places data: {response.json().get('error', {}).get('message', 'Unknown error')}"
+        )
     return response.json()
+
 
