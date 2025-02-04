@@ -30,28 +30,6 @@ app = FastAPI()
 from pydantic import BaseModel
 from typing import Optional, List
 
-# class Location(BaseModel):
-#     latitude: float
-#     longitude: float
-
-#     class Config:
-#         extra = "ignore" 
-
-# class PlaceInfo(BaseModel):
-#     location: Optional[Location] = None
-#     formattedAddress: Optional[str] = None
-#     websiteUri: Optional[str] = None
-#     displayName: Optional[str] = None
-
-#     class Config:
-#         extra = "ignore"
-
-# class GooglePlacesResponse(BaseModel):
-#     places: List[PlaceInfo] = []
-
-#     class Config:
-#         extra = "ignore"
-
 
 class ShoppingListRequest(BaseModel):
     latitude: float
