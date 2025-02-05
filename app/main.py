@@ -135,8 +135,8 @@ def recommend_cheapest_store(request: ShoppingListRequest):
     print(recommendation_text)
 
     return {
-        "shopping_list": items,
-        "google_places_data": nearby_data, 
+        # "shopping_list": items,
+        # "google_places_data": nearby_data, 
         "llm_recommendation": recommendation_text
     }
 
