@@ -48,11 +48,11 @@
    cd grocery-recommender-api
    ```
 
-2. **Create a Virtual Environment:**
+2. **Create a Conda Environment:**
 
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # For Windows: venv\Scripts\activate
+   conda create -n grocery_env python=3.8 -y
+   conda activate grocery_env
    ```
 
 3. **Install Dependencies:**
