@@ -4,9 +4,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
 from openai import OpenAI
+from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
+
 
 load_dotenv()
 
@@ -17,6 +19,15 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 OpenAI.api_key = OPENAI_API_KEY
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Replace "*" with your frontend domain in production, e.g., ["http://localhost:3000"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # client = MongoClient(MONGODB_URI)
 # db = client.grocerydb
@@ -135,8 +146,8 @@ def recommend_cheapest_store(request: ShoppingListRequest):
     print(recommendation_text)
 
     return {
-        "shopping_list": items,
-        "google_places_data": nearby_data, 
+        # "shopping_list": items,
+        # "google_places_data": nearby_data, 
         "llm_recommendation": recommendation_text
     }
 
