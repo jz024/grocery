@@ -5,6 +5,7 @@ from pydantic import BaseModel
 import requests
 from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Dict, List, Optional, Any
 
 
 from dotenv import load_dotenv
@@ -22,23 +23,25 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace "*" with your frontend domain in production, e.g., ["http://localhost:3000"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# client = MongoClient(MONGODB_URI)
-# db = client.grocerydb
-# stores_collection = db.stores
-
-# try:
-#     print(client.list_database_names())
-# except Exception as e:
-#     print("Connection error:", e)
+mongo_client = MongoClient(MONGODB_URI)
+db = mongo_client.grocerydb
+onboarding_collection = db.onboardingData 
 
 from pydantic import BaseModel
 from typing import Optional, List
+
+class UserPreferences(BaseModel):
+    uid: str
+    cuisinePreferences: Optional[List[str]] = None
+    foodAllergies: Optional[List[str]] = None
+    dietaryPreferences: Optional[List[str]] = None
+    preferences: Optional[Dict[str, Any]] = None 
 
 
 class ShoppingListRequest(BaseModel):
@@ -49,6 +52,68 @@ class ShoppingListRequest(BaseModel):
 @app.get("/")
 def read_root():
     return {"message": "Hello from the Grocery Recommender (New Nearby Search)!"}
+
+@app.post("/onboarding")
+def update_user_preferences(data: UserPreferences):
+    try:
+        if not data.uid:
+            raise HTTPException(status_code=400, detail="User ID (uid) is required")
+
+        existing_user = onboarding_collection.find_one({"uid": data.uid})
+
+        update_fields = {}
+
+        if data.cuisinePreferences:
+            updated_cuisines = set(data.cuisinePreferences)
+            if existing_user and "cuisinePreferences" in existing_user:
+                updated_cuisines.update(existing_user["cuisinePreferences"])
+            update_fields["cuisinePreferences"] = list(updated_cuisines)
+
+        if data.foodAllergies:
+            updated_allergies = set(data.foodAllergies)
+            if existing_user and "foodAllergies" in existing_user:
+                updated_allergies.update(existing_user["foodAllergies"])
+            update_fields["foodAllergies"] = list(updated_allergies)
+
+        if data.dietaryPreferences:
+            updated_dietary = set(data.dietaryPreferences)
+            if existing_user and "dietaryPreferences" in existing_user:
+                updated_dietary.update(existing_user["dietaryPreferences"])
+            update_fields["dietaryPreferences"] = list(updated_dietary)
+
+        if data.preferences:
+            updated_preferences = existing_user.get("preferences", {}) if existing_user else {}
+            for key, value in data.preferences.items():
+                if isinstance(value, list): 
+                    updated_preferences[key] = list(set(updated_preferences.get(key, []) + value))
+                elif isinstance(value, dict):
+                    updated_preferences[key] = {**updated_preferences.get(key, {}), **value}
+                else:
+                    updated_preferences[key] = value
+
+            update_fields["preferences"] = updated_preferences 
+
+        if not update_fields:
+            raise HTTPException(status_code=400, detail="No valid fields provided for update")
+
+        onboarding_collection.update_one(
+            {"uid": data.uid},
+            {"$set": update_fields},
+            upsert=True
+        )
+
+        return {"message": "User preferences updated successfully", "updated_fields": update_fields}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    
+
+@app.get("/onboarding/{uid}")
+def get_user_preferences(uid: str):
+    user_data = onboarding_collection.find_one({"uid": uid}, {"_id": 0})
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User preferences not found")
+    return user_data
 
 
 @app.post("/recommend-cheapest-store")
@@ -75,44 +140,6 @@ def recommend_cheapest_store(request: ShoppingListRequest):
         )
 
     stores_text = "\n".join(store_summaries)
-
-
-    # nearby_data = fetch_nearby_stores(lat, lon, query)
-
-
-    # if nearby_data and "places" in nearby_data:
-    #     for place in nearby_data["places"]:
-    #         display_info = place.get("displayName", {})
-    #         store_name = display_info.get("text", "Unknown Store")
-    #         store_loc = place.get("location", {})
-    #         lat_field = store_loc.get("latitude")
-    #         lon_field = store_loc.get("longitude")
-    #         place_id = place.get("name", "N/A")
-
-    #         if not place_id:
-    #             continue
-
-    #         store_doc = {
-    #             "place_id": place_id,
-    #             "name": store_name,
-    #             "location": {
-    #                 "type": "Point",
-    #                 "coordinates": [lon_field, lat_field] if (lon_field and lat_field) else []
-    #             },
-    #         }
-
-    #         existing_store = stores_collection.find_one({"place_id": place_id})
-    #         if not existing_store:
-    #             stores_collection.insert_one(store_doc)
-
-    # store_summaries = []
-    # if nearby_data and "places" in nearby_data:
-    #     for place in nearby_data["places"]:
-    #         name_obj = place.get("displayName", {})
-    #         store_name = name_obj.get("text", "Unknown Store")
-    #         store_summaries.append(f"- {store_name}")
-
-    # stores_text = "\n".join(store_summaries)
 
     prompt = f"""
     You are a helpful grocery assistant. 
