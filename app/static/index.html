@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grocery Assistant</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .chat-container {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            margin-left: 20%;
+        }
+        .ai-message {
+            background-color: #f5f5f5;
+            margin-right: 20%;
+        }
+        input[type="text"], input[type="submit"], button {
+            padding: 8px;
+            margin: 5px;
+        }
+        .preference-input {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Grocery Assistant</h1>
+
+    <!-- Onboarding Section -->
+    <div class="section">
+        <h2>User Preferences</h2>
+        <div class="preference-input">
+            <label>User ID:</label>
+            <input type="text" id="uid" placeholder="Enter user ID">
+        </div>
+        <div class="preference-input">
+            <label>Cuisine Preferences (comma-separated):</label>
+            <input type="text" id="cuisinePreferences" placeholder="Italian, Mexican, etc.">
+        </div>
+        <div class="preference-input">
+            <label>Food Allergies (comma-separated):</label>
+            <input type="text" id="foodAllergies" placeholder="Peanuts, Dairy, etc.">
+        </div>
+        <div class="preference-input">
+            <label>Dietary Preferences (comma-separated):</label>
+            <input type="text" id="dietaryPreferences" placeholder="Vegetarian, Vegan, etc.">
+        </div>
+        <button onclick="savePreferences()">Save Preferences</button>
+        <button onclick="getPreferences()">Get Preferences</button>
+        <div id="preferencesResult"></div>
+    </div>
+
+    <!-- Chat Section -->
+    <div class="section">
+        <h2>Chat with Assistant</h2>
+        <div class="chat-container" id="chatContainer"></div>
+        <input type="text" id="chatMessage" placeholder="Type your message...">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <!-- Directions Section -->
+    <div class="section">
+        <h2>Get Directions</h2>
+        <div class="preference-input">
+            <label>Starting Location:</label>
+            <input type="text" id="startLocation" placeholder="Enter starting point">
+        </div>
+        <div class="preference-input">
+            <label>Destination:</label>
+            <input type="text" id="endLocation" placeholder="Enter destination">
+        </div>
+        <button onclick="getDirections()">Get Directions</button>
+        <div id="directionsResult"></div>
+    </div>
+
+    <!-- Add this after the Chat Section -->
+    <div class="section">
+        <h2>Shopping List</h2>
+        <button onclick="generateShoppingList()">Generate Shopping List</button>
+        <div id="shoppingListResult"></div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:8000';
+
+        async function savePreferences() {
+            const uid = document.getElementById('uid').value;
+            const cuisinePreferences = document.getElementById('cuisinePreferences').value.split(',').map(s => s.trim());
+            const foodAllergies = document.getElementById('foodAllergies').value.split(',').map(s => s.trim());
+            const dietaryPreferences = document.getElementById('dietaryPreferences').value.split(',').map(s => s.trim());
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/onboarding`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        uid,
+                        cuisinePreferences,
+                        foodAllergies,
+                        dietaryPreferences
+                    })
+                });
+                const data = await response.json();
+                document.getElementById('preferencesResult').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('preferencesResult').innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        async function getPreferences() {
+            const uid = document.getElementById('uid').value;
+            try {
+                const response = await fetch(`${API_BASE_URL}/onboarding/${uid}`);
+                const data = await response.json();
+                document.getElementById('preferencesResult').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('preferencesResult').innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        async function sendMessage() {
+            const uid = document.getElementById('uid').value;
+            const message = document.getElementById('chatMessage').value;
+            
+            if (!uid || !message) {
+                alert('Please enter both user ID and message');
+                return;
+            }
+
+            // Add user message to chat
+            addMessageToChat('user', message);
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/chat?uid=${uid}&message=${encodeURIComponent(message)}`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                // Add AI response to chat
+                addMessageToChat('ai', data.ai_response);
+                
+                // Clear input field
+                document.getElementById('chatMessage').value = '';
+            } catch (error) {
+                console.error('Error:', error);
+                addMessageToChat('ai', `Error: ${error.message}`);
+            }
+        }
+
+        function addMessageToChat(sender, message) {
+            const chatContainer = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            messageDiv.textContent = message;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        async function getDirections() {
+            const start = document.getElementById('startLocation').value;
+            const end = document.getElementById('endLocation').value;
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/directions?locations=${encodeURIComponent(start)}&locations=${encodeURIComponent(end)}`);
+                const data = await response.json();
+                document.getElementById('directionsResult').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('directionsResult').innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        async function generateShoppingList() {
+            const uid = document.getElementById('uid').value;
+            if (!uid) {
+                alert('Please enter a user ID');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/generate-shopping-list/${uid}`);
+                const data = await response.json();
+                
+                // Format the shopping list for display
+                let formattedList = '<h3>Shopping List</h3>';
+                
+                // Add locations
+                formattedList += '<h4>Stores:</h4><ul>';
+                data.locations.forEach(location => {
+                    formattedList += `<li>${location}</li>`;
+                });
+                formattedList += '</ul>';
+                
+                // Add items
+                formattedList += '<h4>Items:</h4><ul>';
+                data.items.forEach(item => {
+                    formattedList += `<li>${item.name} - $${item.price.toFixed(2)}</li>`;
+                });
+                formattedList += '</ul>';
+                
+                document.getElementById('shoppingListResult').innerHTML = formattedList;
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('shoppingListResult').innerHTML = `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html> 
