@@ -49,13 +49,21 @@
 <body>
     <h1>Grocery Assistant</h1>
 
+    <!-- Global UID Section -->
+    <div class="section" style="background-color: #e8f5e9;">
+        <h2>Set Global User ID</h2>
+        <div class="preference-input">
+            <label>User ID:</label>
+            <input type="text" id="globalUid" placeholder="Enter user ID">
+            <button onclick="setGlobalUid()">Set User ID</button>
+            <button onclick="testFirebase()">Test Firebase Connection</button>
+        </div>
+        <div id="firebaseTestResult"></div>
+    </div>
+
     <!-- Onboarding Section -->
     <div class="section">
         <h2>User Preferences</h2>
-        <div class="preference-input">
-            <label>User ID:</label>
-            <input type="text" id="uid" placeholder="Enter user ID">
-        </div>
         <div class="preference-input">
             <label>Cuisine Preferences (comma-separated):</label>
             <input type="text" id="cuisinePreferences" placeholder="Italian, Mexican, etc.">
@@ -105,9 +113,62 @@
 
     <script>
         const API_BASE_URL = 'http://localhost:8000';
+        let globalUid = '';
+
+        function setGlobalUid() {
+            const uidInput = document.getElementById('globalUid');
+            globalUid = uidInput.value.trim();
+            
+            if (!globalUid) {
+                alert('Please enter a valid User ID');
+                return;
+            }
+
+            // Update all sections to use this UID
+            document.getElementById('uid').value = globalUid;
+            
+            // Optional: Disable the UID input after setting
+            uidInput.disabled = true;
+            
+            // Test the Firebase connection with this UID
+            testFirebase();
+        }
+
+        async function testFirebase() {
+            const uid = document.getElementById('globalUid').value.trim();
+            if (!uid) {
+                alert('Please enter a User ID first');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/test-firebase/${uid}`);
+                const data = await response.json();
+                
+                // Display the results
+                const resultDiv = document.getElementById('firebaseTestResult');
+                resultDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                
+                // If successful, update the preferences fields with the data
+                if (data.processed_data) {
+                    document.getElementById('cuisinePreferences').value = 
+                        data.processed_data.cuisinePreferences.join(', ');
+                    document.getElementById('foodAllergies').value = 
+                        data.processed_data.foodAllergies.join(', ');
+                    document.getElementById('dietaryPreferences').value = 
+                        data.processed_data.dietaryPreferences.join(', ');
+                }
+            } catch (error) {
+                document.getElementById('firebaseTestResult').innerHTML = 
+                    `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
 
         async function savePreferences() {
-            const uid = document.getElementById('uid').value;
+            if (!globalUid) {
+                alert('Please set a User ID first');
+                return;
+            }
             const cuisinePreferences = document.getElementById('cuisinePreferences').value.split(',').map(s => s.trim());
             const foodAllergies = document.getElementById('foodAllergies').value.split(',').map(s => s.trim());
             const dietaryPreferences = document.getElementById('dietaryPreferences').value.split(',').map(s => s.trim());
@@ -119,7 +180,7 @@
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        uid,
+                        uid: globalUid,
                         cuisinePreferences,
                         foodAllergies,
                         dietaryPreferences
@@ -134,9 +195,12 @@
         }
 
         async function getPreferences() {
-            const uid = document.getElementById('uid').value;
+            if (!globalUid) {
+                alert('Please set a User ID first');
+                return;
+            }
             try {
-                const response = await fetch(`${API_BASE_URL}/onboarding/${uid}`);
+                const response = await fetch(`${API_BASE_URL}/onboarding/${globalUid}`);
                 const data = await response.json();
                 document.getElementById('preferencesResult').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
             } catch (error) {
@@ -146,11 +210,14 @@
         }
 
         async function sendMessage() {
-            const uid = document.getElementById('uid').value;
+            if (!globalUid) {
+                alert('Please set a User ID first');
+                return;
+            }
             const message = document.getElementById('chatMessage').value;
             
-            if (!uid || !message) {
-                alert('Please enter both user ID and message');
+            if (!message) {
+                alert('Please enter a message');
                 return;
             }
 
@@ -158,7 +225,7 @@
             addMessageToChat('user', message);
 
             try {
-                const response = await fetch(`${API_BASE_URL}/chat?uid=${uid}&message=${encodeURIComponent(message)}`, {
+                const response = await fetch(`${API_BASE_URL}/chat?uid=${globalUid}&message=${encodeURIComponent(message)}`, {
                     method: 'POST'
                 });
                 const data = await response.json();
@@ -198,14 +265,13 @@
         }
 
         async function generateShoppingList() {
-            const uid = document.getElementById('uid').value;
-            if (!uid) {
-                alert('Please enter a user ID');
+            if (!globalUid) {
+                alert('Please set a User ID first');
                 return;
             }
 
             try {
-                const response = await fetch(`${API_BASE_URL}/generate-shopping-list/${uid}`);
+                const response = await fetch(`${API_BASE_URL}/generate-shopping-list/${globalUid}`);
                 const data = await response.json();
                 
                 // Format the shopping list for display
