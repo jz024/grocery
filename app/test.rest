@@ -1,0 +1,18 @@
+### Get onboarding details
+GET https://llmaps.site/onboarding/Y84O1MLwhMRTUISOeKHHJucdCBq2
+Accept: application/json
+
+###
+
+### Send chat message
+POST https://llmaps.site/chat
+Content-Type: application/json
+
+{
+    "uid": "Y84O1MLwhMRTUISOeKHHJucdCBq2",
+    "message": "Hello, I need some grocery advice."
+}
+###
+POST https://llmaps.site/chat?uid=Y84O1MLwhMRTUISOeKHHJucdCBq2&message=Hello,%20I%20need%20some%20grocery%20advice
+Content-Type: application/json
+###
