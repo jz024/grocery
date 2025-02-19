@@ -98,9 +98,16 @@ def get_user_preferences(uid: str):
         raise HTTPException(status_code=404, detail="User preferences not found")
     return user_data
 
+class ChatRequest(BaseModel):
+    uid: str
+    message: str
+
 @app.post("/chat")
-def chat_with_ai(uid: str, message: str):
+def chat_with_ai(request: ChatRequest):
     try:
+        uid = request.uid
+        message = request.message
+
         # Fetch user preferences from Firebase using the correct path
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
         user_doc = user_ref.get()
@@ -304,7 +311,7 @@ def generate_shopping_list(uid: str):
                 {"role": "system", "content": "You are a preference analyzer that returns only JSON."},
                 {"role": "user", "content": preference_prompt}
             ],
-            max_tokens=500,
+            max_tokens= 1000,
             temperature=0.3
         )
 
@@ -494,3 +501,4 @@ def test_firebase_connection(uid: str):
 
 # Add this after creating the FastAPI app
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
