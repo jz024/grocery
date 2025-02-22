@@ -382,6 +382,7 @@ def generate_shopping_list(uid: str):
         Only include items that were specifically discussed or recommended in the conversation.
         If prices were mentioned, include them; otherwise, estimate reasonable prices.
         As for locations, please use your best judgement based on the user's location.
+        the output locations should be actual store names, for example "target, walmart, Ranch99, tarder joes, etc"
         User Preferences:
         {json.dumps(current_preferences, indent=2)}  
 
@@ -404,6 +405,7 @@ def generate_shopping_list(uid: str):
         4. Include at least one store and one item
         5. If no specific items were discussed, return an empty list
         6. Do not include any comments or explanations, only the JSON object
+        
         """
 
         completion = client.chat.completions.create(
@@ -501,4 +503,3 @@ def test_firebase_connection(uid: str):
 
 # Add this after creating the FastAPI app
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
-
