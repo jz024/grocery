@@ -98,17 +98,10 @@ def get_user_preferences(uid: str):
         raise HTTPException(status_code=404, detail="User preferences not found")
     return user_data
 
-class ChatRequest(BaseModel):
-    uid: str
-    message: str
-
 @app.post("/chat")
-def chat_with_ai(request: ChatRequest):
+def chat_with_ai(uid: str, message: str):
     try:
-        uid = request.uid
-        message = request.message
-
-        # Fetch user preferences from Firebase using the correct path
+        # Fetch user preferences from Firebase
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
         user_doc = user_ref.get()
         
@@ -116,8 +109,6 @@ def chat_with_ai(request: ChatRequest):
             raise HTTPException(status_code=404, detail="User preferences not found")
         
         user_data = user_doc.to_dict()
-        
-        # Ensure all required fields exist with default values if not present
         user_data = {
             "cuisinePreferences": user_data.get("cuisinePreferences", []),
             "foodAllergies": user_data.get("foodAllergies", []),
@@ -125,46 +116,71 @@ def chat_with_ai(request: ChatRequest):
             "location": user_data.get("location", "San Francisco, CA"),
         }
 
-        # Fetch recent chat history (last 5 messages)
-        chat_history = list(chat_collection.find(
+        # Fetch recent history (both chats and shopping lists)
+        history = list(chat_collection.find(
             {
                 "uid": uid,
-                "type": "chat"
-            }, 
-            {"_id": 0, "user_message": 1, "ai_response": 1}
-        ).sort("timestamp", -1).limit(5))
+                "type": {"$in": ["chat", "shopping_list"]}  # Include both types
+            },
+            {"_id": 0, "type": 1, "user_message": 1, "ai_response": 1, "list_data": 1, "timestamp": 1}
+        ).sort("timestamp", -1).limit(5))  # Increased limit to include more context
         
         # Reverse to get chronological order
-        chat_history.reverse()
+        history.reverse()
 
-        # Construct messages array with chat history
+        # Construct messages array with system prompt
         messages = [
-            {"role": "system", "content": "You are a helpful grocery assistant. Provide specific and practical advice about groceries, recipes, and shopping while considering the user's preferences and restrictions."}
+            {
+                "role": "system", 
+                "content": """You are a helpful grocery assistant. Provide specific and practical advice about groceries, 
+                recipes, and shopping while considering the user's preferences and restrictions. You have access to the 
+                user's past messages and shopping lists. Maintain context of the conversation and reference previous 
+                shopping lists when relevant."""
+            }
         ]
 
-        # Add chat history to messages
-        for chat in chat_history:
-            if "user_message" in chat and "ai_response" in chat:  # Check if fields exist
-                messages.extend([
-                    {"role": "user", "content": chat["user_message"]},
-                    {"role": "assistant", "content": chat["ai_response"]}
-                ])
+        # Add user preferences context
+        messages.append({
+            "role": "system",
+            "content": f"""User Preferences:
+            - Cuisine Preferences: {', '.join(user_data['cuisinePreferences'])}
+            - Food Allergies: {', '.join(user_data['foodAllergies'])}
+            - Dietary Preferences: {', '.join(user_data['dietaryPreferences'])}
+            - Location: {user_data['location']}"""
+        })
 
-        # Add current user preferences and message
-        current_context = f"""
-        User Preferences:
-        - Cuisine Preferences: {user_data.get("cuisinePreferences", [])}
-        - Food Allergies: {user_data.get("foodAllergies", [])}
-        - Dietary Preferences: {user_data.get("dietaryPreferences", [])}
-        - Location: {user_data.get("location", "San Francisco, CA")}
-        Current message: {message}
-        """
-        messages.append({"role": "user", "content": current_context})
+        # Add history to messages
+        for item in history:
+            if item["type"] == "chat":
+                if "user_message" in item:
+                    messages.append({"role": "user", "content": item["user_message"]})
+                if "ai_response" in item:
+                    messages.append({"role": "assistant", "content": item["ai_response"]})
+            elif item["type"] == "shopping_list":
+                # Format shopping list as a clear message
+                if "list_data" in item:
+                    list_data = item["list_data"]
+                    shopping_list_msg = "Previously generated shopping list:\n"
+                    
+                    if "locations" in list_data:
+                        shopping_list_msg += f"Stores: {', '.join(list_data['locations'])}\n"
+                    
+                    if "items" in list_data:
+                        shopping_list_msg += "Items:\n"
+                        for item_entry in list_data["items"]:
+                            shopping_list_msg += f"- {item_entry['name']} (${item_entry['price']:.2f} at {item_entry.get('location', 'any store')})\n"
+                    
+                    messages.append({"role": "assistant", "content": shopping_list_msg})
+
+        # Add current message
+        messages.append({"role": "user", "content": message})
+
+        # Print messages for debugging
+        print("Sending messages to OpenAI:", json.dumps(messages, indent=2))
 
         client = OpenAI()
-
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4-0125-preview",
             messages=messages,
             max_tokens=500,
             temperature=0.7
@@ -172,11 +188,11 @@ def chat_with_ai(request: ChatRequest):
 
         ai_response = completion.choices[0].message.content.strip()
 
-        # Save chat history with type field
+        # Save chat history
         chat_collection.insert_one({
-            "uid": uid, 
-            "type": "chat",  # Add type field to distinguish from shopping lists
-            "user_message": message, 
+            "uid": uid,
+            "type": "chat",
+            "user_message": message,
             "ai_response": ai_response,
             "timestamp": datetime.datetime.now()
         })
@@ -185,7 +201,7 @@ def chat_with_ai(request: ChatRequest):
 
     except Exception as e:
         print(f"Chat error: {str(e)}")  # Log the full error
-        return {"ai_response": f"I apologize, but I encountered an error: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.get("/directions")
 def get_directions(locations: List[str]):
@@ -455,13 +471,13 @@ def generate_shopping_list(uid: str):
                 "timestamp": datetime.datetime.now()
             })
 
-            # Delete chat history for this user
-            delete_result = chat_collection.delete_many({
-                "uid": uid,
-                "type": "chat"  # Only delete chat messages, keep shopping lists
-            })
+            # # Delete chat history for this user
+            # delete_result = chat_collection.delete_many({
+            #     "uid": uid,
+            #     "type": "chat"  # Only delete chat messages, keep shopping lists
+            # })
             
-            print(f"\n=== Deleted {delete_result.deleted_count} chat messages for user {uid} ===")
+            # print(f"\n=== Deleted {delete_result.deleted_count} chat messages for user {uid} ===")
 
             return shopping_list
 
@@ -500,6 +516,147 @@ def test_firebase_connection(uid: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Firebase error: {str(e)}")
+
+@app.get("/test-store-search/{uid}")
+async def test_store_search(uid: str):
+    try:
+        # Get the most recent shopping list
+        last_shopping_list = chat_collection.find_one(
+            {
+                "uid": uid,
+                "type": "shopping_list"
+            },
+            sort=[("timestamp", -1)]
+        )
+
+        if not last_shopping_list:
+            raise HTTPException(
+                status_code=404,
+                detail="No shopping list found. Please generate a shopping list first."
+            )
+
+        # Get items from the shopping list
+        items = [item["name"] for item in last_shopping_list["list_data"]["items"]]
+        if not items:
+            raise HTTPException(status_code=400, detail="Shopping list is empty")
+
+        # Get user location
+        user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
+        user_doc = user_ref.get()
+        
+        if not user_doc.exists:
+            raise HTTPException(
+                status_code=404,
+                detail="User preferences not found. Please set your location in preferences."
+            )
+        
+        user_data = user_doc.to_dict()
+        location = user_data.get("location")
+        
+        if not location:
+            raise HTTPException(
+                status_code=400,
+                detail="Location not set in preferences. Please set your location first."
+            )
+
+        # Construct query for all items
+        items_text = ", ".join(items)
+        search_query = f"""
+        Find stores in {location} that sell these items: {items_text}
+        
+        Return the answer in this exact JSON format:
+        {{
+            "stores": [
+                {{
+                    "name": "Store name",
+                    "address": "Full store address with city and zip code",
+                    "available_items": ["item1", "item2"]
+                }}
+            ]
+        }}
+        Requirements:
+        1. Only include real stores that actually exist at this location: {location}
+        2. Include complete store addresses with zip codes
+        3. Group items by store where they're most likely to be found
+        4. Only include major grocery stores and specialty stores that definitely exist at this location
+        Do not include any other text.
+        """
+
+        # Make Perplexity API call
+        url = "https://api.perplexity.ai/chat/completions"
+        payload = {
+            "model": "sonar",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a store finder that returns only JSON data about stores and their available items."
+                },
+                {
+                    "role": "user",
+                    "content": search_query
+                }
+            ]
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {os.getenv('PERPLEXITY_API_KEY')}",
+            "Content-Type": "application/json"
+        }
+
+        print("Making API call to Perplexity...")
+        print("Searching for items:", items_text)
+        response = requests.post(url, json=payload, headers=headers)
+        print(f"Response status: {response.status_code}")
+        print(f"Response text: {response.text}")
+
+        if not response.ok:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Perplexity API error: {response.text}"
+            )
+
+        response_data = response.json()
+        store_data = response_data["choices"][0]["message"]["content"]
+        
+        # Clean up the response - remove markdown code blocks if present
+        store_data = store_data.replace('```json\n', '').replace('\n```', '').strip()
+        
+        # If the response is a string, parse it as JSON
+        if isinstance(store_data, str):
+            try:
+                store_data = json.loads(store_data)
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error: {str(e)}")
+                print(f"Raw store_data: {store_data}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to parse store recommendations"
+                )
+
+        # Validate the response structure
+        if not isinstance(store_data, dict) or "stores" not in store_data:
+            raise HTTPException(
+                status_code=500,
+                detail="Invalid response format from Perplexity API"
+            )
+
+        # Save the results
+        chat_collection.insert_one({
+            "uid": uid,
+            "type": "store_search",
+            "original_items": items,
+            "store_recommendations": store_data,
+            "timestamp": datetime.datetime.now()
+        })
+
+        return {
+            "original_items": items,
+            "store_recommendations": store_data
+        }
+
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Add this after creating the FastAPI app
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
