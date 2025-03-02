@@ -182,7 +182,7 @@ def chat_with_ai(uid: str, message: str):
         completion = client.chat.completions.create(
             model="gpt-4-0125-preview",
             messages=messages,
-            max_tokens=500,
+            max_tokens=1000,
             temperature=0.7
         )
 
@@ -278,111 +278,8 @@ def generate_shopping_list(uid: str):
         if not chat_history:
             return {"locations": [], "items": []}
 
-        # First, get current preferences from Firebase
-        user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
-        user_doc = user_ref.get()
-        
-        if not user_doc.exists:
-            current_preferences = {
-                "cuisinePreferences": [],
-                "foodAllergies": [],
-                "dietaryPreferences": []
-            }
-        else:
-            current_preferences = user_doc.to_dict()
-
-        # print("\n=== Current Preferences ===")
-        # print(json.dumps(current_preferences, indent=2))
-
-        # Analyze chat history for new preferences
-        client = OpenAI()
-        chat_text = "\n".join([
-            f"User: {chat.get('user_message', '')}\nAssistant: {chat.get('ai_response', '')}"
-            for chat in reversed(chat_history)
-        ])
-
-        # print("\n=== Analyzing Chat History ===")
-        # print(chat_text)
-
-        preference_prompt = f"""
-        Analyze this conversation and identify any new or updated user preferences.
-        Current preferences: {current_preferences}
-
-        Conversation:
-        {chat_text}
-
-        Return a valid JSON object with only new or changed preferences:
-        {{
-            "cuisinePreferences": ["new cuisine 1", "new cuisine 2"],
-            "foodAllergies": ["new allergy 1"],
-            "dietaryPreferences": ["new diet 1"]
-        }}
-        Only include preferences that are clearly stated or implied in the conversation.
-        Return empty arrays if no new preferences are found.
-        """
-
-        preference_completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a preference analyzer that returns only JSON."},
-                {"role": "user", "content": preference_prompt}
-            ],
-            max_tokens= 1000,
-            temperature=0.3
-        )
-
-        try:
-            # Clean the response by removing markdown code block markers if present
-            raw_response = preference_completion.choices[0].message.content.strip()
-            cleaned_response = raw_response.replace('```json', '').replace('```', '').strip()
-            
-            new_preferences = json.loads(cleaned_response)
-            
-            print("\n=== New Preferences Detected ===")
-            print(json.dumps(new_preferences, indent=2))
-            
-            # Merge new preferences with existing ones
-            for key in ['cuisinePreferences', 'foodAllergies', 'dietaryPreferences']:
-                if key in new_preferences and new_preferences[key]:
-                    current_set = set(current_preferences.get(key, []))
-                    new_set = set(new_preferences[key])
-                    current_preferences[key] = list(current_set.union(new_set))
-
-            print("\n=== Updated Preferences ===")
-            print(json.dumps(current_preferences, indent=2))
-
-            # Update Firebase with merged preferences
-            try:
-                user_ref.set(current_preferences, merge=True)
-                
-                # Verify the update by reading back from Firebase
-                updated_doc = user_ref.get()
-                if updated_doc.exists:
-                    verified_data = updated_doc.to_dict()
-                    print("\n=== Verified Firebase Update ===")
-                    print(json.dumps(verified_data, indent=2))
-                    
-                    # Check if all new preferences were saved
-                    for key in ['cuisinePreferences', 'foodAllergies', 'dietaryPreferences']:
-                        if key in current_preferences:
-                            expected_set = set(current_preferences[key])
-                            actual_set = set(verified_data.get(key, []))
-                            if expected_set != actual_set:
-                                print(f"\nWarning: Mismatch in {key}")
-                                print(f"Expected: {expected_set}")
-                                print(f"Actual: {actual_set}")
-                else:
-                    print("\n=== Error: Failed to verify Firebase update ===")
-                    
-            except Exception as firebase_error:
-                print(f"\n=== Error Updating Firebase ===")
-                print(f"Error: {str(firebase_error)}")
-                # Continue with shopping list generation even if Firebase update fails
-
-        except json.JSONDecodeError as e:
-            print("\n=== Error Parsing New Preferences ===")
-            print(f"Error: {str(e)}")
-            print("Raw response:", preference_completion.choices[0].message.content.strip())
+        # Update user preferences based on chat history
+        current_preferences = update_preferences_from_history(uid, chat_history)
 
         # Now continue with shopping list generation using updated preferences
         formatted_chats = "\n".join([
@@ -392,13 +289,12 @@ def generate_shopping_list(uid: str):
 
         # Construct prompt for shopping list generation
         prompt = f"""
-        Based on the following conversation history and user preferences, create a shopping list with store locations and items.
+        Based on the following conversation history and user preferences, create a shopping list.
         The list should include all of the items that the user needs to purchase to cook the meal reccomended to them. 
         This should not include any items that were mentioned for other options that the user did not choose.
         Only include items that were specifically discussed or recommended in the conversation.
         If prices were mentioned, include them; otherwise, estimate reasonable prices.
-        As for locations, please use your best judgement based on the user's location.
-        the output locations should be actual store names, for example "target, walmart, Ranch99, tarder joes, etc"
+        
         User Preferences:
         {json.dumps(current_preferences, indent=2)}  
 
@@ -407,10 +303,9 @@ def generate_shopping_list(uid: str):
 
         Return a valid JSON object with exactly this structure:
         {{
-            "locations": ["store1", "store2"],
             "items": [
-                {{"name": "item1", "price": 0.00, "location": "store1"}},
-                {{"name": "item2", "price": 0.00, "location": "store2"}}
+                {{"name": "item1", "price": 0.00}},
+                {{"name": "item2", "price": 0.00}}
             ]
         }}
 
@@ -424,6 +319,7 @@ def generate_shopping_list(uid: str):
         
         """
 
+        client = OpenAI()
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -443,15 +339,12 @@ def generate_shopping_list(uid: str):
             
             # Validate the structure
             if not isinstance(shopping_list, dict):
-                return {"locations": [], "items": []}
+                return {"items": []}
             
             # Ensure required fields exist
-            shopping_list.setdefault("locations", [])
             shopping_list.setdefault("items", [])
             
             # Validate types
-            if not isinstance(shopping_list["locations"], list):
-                shopping_list["locations"] = []
             if not isinstance(shopping_list["items"], list):
                 shopping_list["items"] = []
             
@@ -463,60 +356,106 @@ def generate_shopping_list(uid: str):
             
             shopping_list["items"] = valid_items
 
-            # Save the generated shopping list
+            # Get store recommendations for the items
+            store_recommendations = find_stores_for_items(uid, valid_items)
+            if store_recommendations:
+                shopping_list["store_recommendations"] = store_recommendations
+
+            # Save the complete shopping list with store recommendations to MongoDB
             chat_collection.insert_one({
                 "uid": uid,
                 "type": "shopping_list",
                 "list_data": shopping_list,
+                "store_recommendations": store_recommendations,
                 "timestamp": datetime.datetime.now()
             })
-
-            # # Delete chat history for this user
-            # delete_result = chat_collection.delete_many({
-            #     "uid": uid,
-            #     "type": "chat"  # Only delete chat messages, keep shopping lists
-            # })
-            
-            # print(f"\n=== Deleted {delete_result.deleted_count} chat messages for user {uid} ===")
 
             return shopping_list
 
         except json.JSONDecodeError:
-            return {"locations": [], "items": []}
+            return {"items": []}
 
     except Exception as e:
         print(f"Shopping list generation error: {str(e)}")
-        return {"locations": [], "items": []}
+        return {"items": []}
 
-@app.get("/test-firebase/{uid}")
-def test_firebase_connection(uid: str):
+def find_stores_for_items(uid: str, items: list) -> dict:
+    """Helper function to find stores where items can be purchased"""
     try:
-        # Fetch user preferences from Firebase using the correct path
+        # Get user location
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
         user_doc = user_ref.get()
         
-        if not user_doc.exists:
-            raise HTTPException(status_code=404, detail="User preferences not found")
+        if not user_doc.exists or not user_doc.to_dict().get("location"):
+            return None
+
+        location = user_doc.to_dict()["location"]
+        items_text = ", ".join([item["name"] for item in items])
         
-        # Get the raw data from Firebase
-        raw_data = user_doc.to_dict()
+        # Construct query for stores
+        search_query = f"""
+        Find stores in {location} that sell these items: {items_text}
         
-        # Format the data for display
-        formatted_data = {
-            "raw_firebase_data": raw_data,
-            "processed_data": {
-                "cuisinePreferences": raw_data.get("cuisinePreferences", []),
-                "foodAllergies": raw_data.get("foodAllergies", []),
-                "dietaryPreferences": raw_data.get("dietaryPreferences", []),
-                "location": raw_data.get("location", "San Francisco, CA")
-            }
+        Return the answer in this exact JSON format:
+        {{
+            "stores": [
+                {{
+                    "name": "Store name",
+                    "address": "Full store address with city and zip code",
+                    "available_items": ["item1", "item2"]
+                }}
+            ]
+        }}
+        Requirements:
+        1. Only include real stores that actually exist at this location: {location}
+        2. Include complete store addresses with zip codes
+        3. Group items by store where they're most likely to be found
+        4. Only include major grocery stores and specialty stores that definitely exist at this location
+        Do not include any other text.
+        """
+
+        # Make Perplexity API call
+        url = "https://api.perplexity.ai/chat/completions"
+        payload = {
+            "model": "sonar",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a store finder that returns only JSON data about stores and their available items."
+                },
+                {
+                    "role": "user",
+                    "content": search_query
+                }
+            ]
         }
         
-        return formatted_data
+        headers = {
+            "Authorization": f"Bearer {os.getenv('PERPLEXITY_API_KEY')}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(url, json=payload, headers=headers)
+        if not response.ok:
+            return None
+
+        response_data = response.json()
+        store_data = response_data["choices"][0]["message"]["content"]
+        store_data = store_data.replace('```json\n', '').replace('\n```', '').strip()
+        
+        if isinstance(store_data, str):
+            try:
+                store_data = json.loads(store_data)
+                return store_data
+            except json.JSONDecodeError:
+                return None
+
+        return None
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Firebase error: {str(e)}")
-
+        print(f"Error finding stores: {str(e)}")
+        return None
+    
 @app.get("/test-store-search/{uid}")
 async def test_store_search(uid: str):
     try:
@@ -657,6 +596,156 @@ async def test_store_search(uid: str):
     except Exception as e:
         print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+def update_preferences_from_history(uid: str, chat_history: list) -> dict:
+    """
+    Update user preferences based on chat history and return current preferences
+    """
+    # First, get current preferences from Firebase
+    user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
+    user_doc = user_ref.get()
+    
+    if not user_doc.exists:
+        current_preferences = {
+            "cuisinePreferences": [],
+            "foodAllergies": [],
+            "dietaryPreferences": []
+        }
+    else:
+        current_preferences = user_doc.to_dict()
+
+    # Analyze chat history for new preferences and removed preferences
+    client = OpenAI()
+    chat_text = "\n".join([
+        f"User: {chat.get('user_message', '')}\nAssistant: {chat.get('ai_response', '')}"
+        for chat in reversed(chat_history)
+    ])
+
+    preference_prompt = f"""
+    Analyze this conversation and identify both new preferences and preferences the user no longer wants.
+    Current preferences: {current_preferences}
+
+    Conversation:
+    {chat_text}
+
+    Return a valid JSON object with two sections - new preferences to add and existing preferences to remove:
+    {{
+        "add": {{
+            "cuisinePreferences": ["new cuisine 1", "new cuisine 2"],
+            "foodAllergies": ["new allergy 1"],
+            "dietaryPreferences": ["new diet 1"]
+        }},
+        "remove": {{
+            "cuisinePreferences": ["cuisine to remove 1"],
+            "foodAllergies": ["allergy to remove 1"],
+            "dietaryPreferences": ["diet to remove 1"]
+        }}
+    }}
+    Only include preferences that are clearly stated or implied in the conversation.
+    Return empty arrays if no changes are found.
+    """
+
+    preference_completion = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a preference analyzer that returns only JSON."},
+            {"role": "user", "content": preference_prompt}
+        ],
+        max_tokens=500,
+        temperature=0.3
+    )
+
+    try:
+        # Clean the response by removing markdown code block markers if present
+        raw_response = preference_completion.choices[0].message.content.strip()
+        cleaned_response = raw_response.replace('```json', '').replace('```', '').strip()
+        
+        preference_changes = json.loads(cleaned_response)
+        
+        print("\n=== Preference Changes Detected ===")
+        print(json.dumps(preference_changes, indent=2))
+        
+        # Process additions and removals
+        for key in ['cuisinePreferences', 'foodAllergies', 'dietaryPreferences']:
+            # Add new preferences
+            if key in preference_changes['add'] and preference_changes['add'][key]:
+                current_set = set(current_preferences.get(key, []))
+                new_set = set(preference_changes['add'][key])
+                current_preferences[key] = list(current_set.union(new_set))
+            
+            # Remove preferences
+            if key in preference_changes['remove'] and preference_changes['remove'][key]:
+                current_set = set(current_preferences.get(key, []))
+                remove_set = set(preference_changes['remove'][key])
+                current_preferences[key] = list(current_set.difference(remove_set))
+
+        print("\n=== Updated Preferences ===")
+        print(json.dumps(current_preferences, indent=2))
+
+        # Update Firebase with merged preferences
+        try:
+            user_ref.set(current_preferences, merge=True)
+            
+            # Verify the update by reading back from Firebase
+            updated_doc = user_ref.get()
+            if updated_doc.exists:
+                verified_data = updated_doc.to_dict()
+                print("\n=== Verified Firebase Update ===")
+                print(json.dumps(verified_data, indent=2))
+                
+                # Check if all preference changes were saved correctly
+                for key in ['cuisinePreferences', 'foodAllergies', 'dietaryPreferences']:
+                    if key in current_preferences:
+                        expected_set = set(current_preferences[key])
+                        actual_set = set(verified_data.get(key, []))
+                        if expected_set != actual_set:
+                            print(f"\nWarning: Mismatch in {key}")
+                            print(f"Expected: {expected_set}")
+                            print(f"Actual: {actual_set}")
+            else:
+                print("\n=== Error: Failed to verify Firebase update ===")
+                
+        except Exception as firebase_error:
+            print(f"\n=== Error Updating Firebase ===")
+            print(f"Error: {str(firebase_error)}")
+
+    except json.JSONDecodeError as e:
+        print("\n=== Error Parsing Preference Changes ===")
+        print(f"Error: {str(e)}")
+        print("Raw response:", preference_completion.choices[0].message.content.strip())
+
+    return current_preferences
+
+@app.get("/test-firebase/{uid}")
+def test_firebase_connection(uid: str):
+    try:
+        # Fetch user preferences from Firebase using the correct path
+        user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
+        user_doc = user_ref.get()
+        
+        if not user_doc.exists:
+            raise HTTPException(status_code=404, detail="User preferences not found")
+        
+        # Get the raw data from Firebase
+        raw_data = user_doc.to_dict()
+        
+        # Format the data for display
+        formatted_data = {
+            "raw_firebase_data": raw_data,
+            "processed_data": {
+                "cuisinePreferences": raw_data.get("cuisinePreferences", []),
+                "foodAllergies": raw_data.get("foodAllergies", []),
+                "dietaryPreferences": raw_data.get("dietaryPreferences", []),
+                "location": raw_data.get("location", "San Francisco, CA")
+            }
+        }
+        
+        return formatted_data
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Firebase error: {str(e)}")
+
+
 
 # Add this after creating the FastAPI app
 app.mount("/static", StaticFiles(directory="app/static"), name="static")

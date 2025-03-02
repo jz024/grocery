@@ -300,19 +300,49 @@
                 // Format the shopping list for display
                 let formattedList = '<h3>Shopping List</h3>';
                 
-                // Add locations
-                formattedList += '<h4>Stores:</h4><ul>';
-                data.locations.forEach(location => {
-                    formattedList += `<li>${location}</li>`;
-                });
-                formattedList += '</ul>';
+                // Check if we have store recommendations
+                if (data.store_recommendations && data.store_recommendations.stores) {
+                    formattedList += '<h4>Recommended Stores:</h4>';
+                    data.store_recommendations.stores.forEach(store => {
+                        formattedList += `<div class="store-info">`;
+                        formattedList += `<h5>${store.name}</h5>`;
+                        formattedList += `<p><strong>Address:</strong> ${store.address}</p>`;
+                        formattedList += `<p><strong>Available Items:</strong></p>`;
+                        formattedList += '<ul>';
+                        if (store.available_items) {
+                            store.available_items.forEach(item => {
+                                formattedList += `<li>${item}</li>`;
+                            });
+                        }
+                        formattedList += '</ul></div>';
+                    });
+                }
                 
                 // Add items
                 formattedList += '<h4>Items:</h4><ul>';
-                data.items.forEach(item => {
-                    formattedList += `<li>${item.name} - $${item.price.toFixed(2)}</li>`;
-                });
-                formattedList += '</ul>';
+                // Check if we have list_data structure
+                const items = data.list_data ? data.list_data.items : data.items;
+                
+                if (items && items.length > 0) {
+                    let total = 0;
+                    items.forEach(item => {
+                        // Handle both number and MongoDB $numberDouble format
+                        const price = typeof item.price === 'number' ? 
+                            item.price : 
+                            (item.price.$numberDouble ? parseFloat(item.price.$numberDouble) : 0);
+                        
+                        formattedList += `<li>${item.name} - $${price.toFixed(2)}`;
+                        if (item.location) {
+                            formattedList += ` (Available at: ${item.location})`;
+                        }
+                        formattedList += '</li>';
+                        total += price;
+                    });
+                    formattedList += '</ul>';
+                    formattedList += `<h4>Total: $${total.toFixed(2)}</h4>`;
+                } else {
+                    formattedList += '<li>No items in shopping list</li></ul>';
+                }
                 
                 document.getElementById('shoppingListResult').innerHTML = formattedList;
             } catch (error) {
