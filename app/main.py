@@ -43,6 +43,7 @@ cred = credentials.Certificate(os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH"))
 firebase_admin.initialize_app(cred)
 db_firebase = firestore.client()
 
+# chat input schema
 class ChatRequest(BaseModel):
     uid: str
     message: str
