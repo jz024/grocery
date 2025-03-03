@@ -43,6 +43,10 @@ cred = credentials.Certificate(os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH"))
 firebase_admin.initialize_app(cred)
 db_firebase = firestore.client()
 
+class ChatRequest(BaseModel):
+    uid: str
+    message: str
+
 # Updated User Preferences Schema
 class UserPreferences(BaseModel):
     uid: str
@@ -99,8 +103,11 @@ def get_user_preferences(uid: str):
     return user_data
 
 @app.post("/chat")
-def chat_with_ai(uid: str, message: str):
+def chat_with_ai(request: ChatRequest):
     try:
+        uid = request.uid
+        message = request.message
+
         # Fetch user preferences from Firebase
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
         user_doc = user_ref.get()
@@ -183,7 +190,8 @@ def chat_with_ai(uid: str, message: str):
             model="gpt-4-0125-preview",
             messages=messages,
             max_tokens=1000,
-            temperature=0.7
+            temperature=0.7,
+            stream=True
         )
 
         ai_response = completion.choices[0].message.content.strip()
