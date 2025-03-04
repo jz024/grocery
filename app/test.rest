@@ -1,0 +1,31 @@
+### Get onboarding details
+GET https://llmaps.site/onboarding/Y84O1MLwhMRTUISOeKHHJucdCBq2
+Accept: application/json
+
+###
+
+### Send chat message
+POST https://llmaps.site/chat
+Content-Type: application/json
+
+{
+    "uid": "Y84O1MLwhMRTUISOeKHHJucdCBq2",
+    "message": "Hello, I need some grocery advice."
+}
+###
+POST https://llmaps.site/chat?uid=Y84O1MLwhMRTUISOeKHHJucdCBq2&message=Hello,%20I%20need%20some%20grocery%20advice
+Content-Type: application/json
+###
+### Test local chat endpoint
+# POST http://localhost:8000/chat
+POST https://d375-2601-646-8f80-1110-4c4c-830b-652-52a4.ngrok-free.app/chat
+Content-Type: application/json
+
+{
+    "uid": "Y84O1MLwhMRTUISOeKHHJucdCBq2",
+    "message": "Hello, I need some grocery advice."
+}
+###
+GET http://localhost:8000/generate-shopping-list/Y84O1MLwhMRTUISOeKHHJucdCBq2
+Accept: application/json
+###
