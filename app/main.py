@@ -55,6 +55,11 @@ class ChatRequest(BaseModel):
     uid: str
     message: str
 
+# chat input schema
+class ChatRequest(BaseModel):
+    uid: str
+    message: str
+
 # Updated User Preferences Schema
 class UserPreferences(BaseModel):
     uid: str
@@ -112,11 +117,9 @@ def get_user_preferences(uid: str):
 
 @app.post("/chat")
 def chat_with_ai(request: ChatRequest):
+def chat_with_ai(request: ChatRequest):
     try:
-        uid = request.uid
-        message = request.message
-
-        # Fetch user preferences from Firebase
+        # Fetch user preferences from Firebase using the correct path
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
         user_doc = user_ref.get()
         
@@ -131,18 +134,20 @@ def chat_with_ai(request: ChatRequest):
             "location": user_data.get("location", "San Francisco, CA"),
         }
 
-        # Fetch recent history (both chats and shopping lists)
-        history = list(chat_collection.find(
+        # Fetch recent chat history (last 5 messages)
+        chat_history = list(chat_collection.find(
             {
                 "uid": uid,
-                "type": {"$in": ["chat", "shopping_list"]}  # Include both types
-            },
-            {"_id": 0, "type": 1, "user_message": 1, "ai_response": 1, "list_data": 1, "timestamp": 1}
-        ).sort("timestamp", -1).limit(5))  # Increased limit to include more context
+                "type": "chat"
+            }, 
+            {"_id": 0, "user_message": 1, "ai_response": 1}
+        ).sort("timestamp", -1).limit(5))
         
         # Reverse to get chronological order
         history.reverse()
+        history.reverse()
 
+        # Construct messages array with system prompt
         # Construct messages array with system prompt
         messages = [
             {

@@ -44,6 +44,17 @@
         .preference-input {
             margin: 5px 0;
         }
+        .store-info {
+            margin: 15px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
+        }
+        .store-info h5 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
     </style>
 </head>
 <body>
@@ -109,6 +120,13 @@
         <h2>Shopping List</h2>
         <button onclick="generateShoppingList()">Generate Shopping List</button>
         <div id="shoppingListResult"></div>
+    </div>
+
+    <!-- Add this after the Shopping List section -->
+    <div class="section">
+        <h2>Test Store Search</h2>
+        <button onclick="testStoreSearch()">Find Stores for Current List</button>
+        <div id="storeSearchResult"></div>
     </div>
 
     <script>
@@ -225,9 +243,14 @@
             addMessageToChat('user', message);
 
             try {
-                const response = await fetch(`${API_BASE_URL}/chat?uid=${globalUid}&message=${encodeURIComponent(message)}`, {
-                    method: 'POST'
+                const response = await fetch(`${API_BASE_URL}/chat?uid=${encodeURIComponent(globalUid)}&message=${encodeURIComponent(message)}`, {
+                    method: 'POST',
                 });
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('Error details:', errorData);
+                    throw new Error(`Server error: ${JSON.stringify(errorData)}`);
+                }
                 const data = await response.json();
                 
                 // Add AI response to chat
@@ -277,24 +300,106 @@
                 // Format the shopping list for display
                 let formattedList = '<h3>Shopping List</h3>';
                 
-                // Add locations
-                formattedList += '<h4>Stores:</h4><ul>';
-                data.locations.forEach(location => {
-                    formattedList += `<li>${location}</li>`;
-                });
-                formattedList += '</ul>';
+                // Check if we have store recommendations
+                if (data.store_recommendations && data.store_recommendations.stores) {
+                    formattedList += '<h4>Recommended Stores:</h4>';
+                    data.store_recommendations.stores.forEach(store => {
+                        formattedList += `<div class="store-info">`;
+                        formattedList += `<h5>${store.name}</h5>`;
+                        formattedList += `<p><strong>Address:</strong> ${store.address}</p>`;
+                        formattedList += `<p><strong>Available Items:</strong></p>`;
+                        formattedList += '<ul>';
+                        if (store.available_items) {
+                            store.available_items.forEach(item => {
+                                formattedList += `<li>${item}</li>`;
+                            });
+                        }
+                        formattedList += '</ul></div>';
+                    });
+                }
                 
                 // Add items
                 formattedList += '<h4>Items:</h4><ul>';
-                data.items.forEach(item => {
-                    formattedList += `<li>${item.name} - $${item.price.toFixed(2)}</li>`;
-                });
-                formattedList += '</ul>';
+                // Check if we have list_data structure
+                const items = data.list_data ? data.list_data.items : data.items;
+                
+                if (items && items.length > 0) {
+                    let total = 0;
+                    items.forEach(item => {
+                        // Handle both number and MongoDB $numberDouble format
+                        const price = typeof item.price === 'number' ? 
+                            item.price : 
+                            (item.price.$numberDouble ? parseFloat(item.price.$numberDouble) : 0);
+                        
+                        formattedList += `<li>${item.name} - $${price.toFixed(2)}`;
+                        if (item.location) {
+                            formattedList += ` (Available at: ${item.location})`;
+                        }
+                        formattedList += '</li>';
+                        total += price;
+                    });
+                    formattedList += '</ul>';
+                    formattedList += `<h4>Total: $${total.toFixed(2)}</h4>`;
+                } else {
+                    formattedList += '<li>No items in shopping list</li></ul>';
+                }
                 
                 document.getElementById('shoppingListResult').innerHTML = formattedList;
             } catch (error) {
                 console.error('Error:', error);
                 document.getElementById('shoppingListResult').innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        async function testStoreSearch() {
+            if (!globalUid) {
+                alert('Please set a User ID first');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/test-store-search/${globalUid}`);
+                const data = await response.json();
+                
+                // Format the results for display
+                let formattedResult = '<h3>Store Search Results</h3>';
+                
+                // Show original shopping list if it exists
+                if (data.original_shopping_list && data.original_shopping_list.items) {
+                    formattedResult += '<h4>Original Shopping List:</h4>';
+                    formattedResult += '<ul>';
+                    data.original_shopping_list.items.forEach(item => {
+                        formattedResult += `<li>${item.name} - $${item.price.toFixed(2)}</li>`;
+                    });
+                    formattedResult += '</ul>';
+                }
+                
+                // Show store recommendations if they exist
+                if (data.store_recommendations && data.store_recommendations.stores) {
+                    formattedResult += '<h4>Store Recommendations:</h4>';
+                    data.store_recommendations.stores.forEach(store => {
+                        formattedResult += `<div class="store-info">`;
+                        formattedResult += `<h5>${store.name}</h5>`;
+                        formattedResult += `<p><strong>Address:</strong> ${store.address}</p>`;
+                        formattedResult += `<p><strong>Available Items:</strong></p>`;
+                        formattedResult += '<ul>';
+                        if (store.available_items) {
+                            store.available_items.forEach(item => {
+                                formattedResult += `<li>${item}</li>`;
+                            });
+                        }
+                        formattedResult += '</ul></div>';
+                    });
+                } else {
+                    formattedResult += '<p>No store recommendations available.</p>';
+                }
+                
+                document.getElementById('storeSearchResult').innerHTML = formattedResult;
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('storeSearchResult').innerHTML = 
+                    `<p style="color: red;">Error: ${error.message}</p>
+                    <p>Please make sure you have generated a shopping list first.</p>`;
             }
         }
     </script>
