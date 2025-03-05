@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
 import requests
@@ -53,11 +53,6 @@ chat_collection = db.chatHistory
 cred = credentials.Certificate(os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH"))
 firebase_admin.initialize_app(cred)
 db_firebase = firestore.client()
-
-# chat input schema
-class ChatRequest(BaseModel):
-    uid: str
-    message: str
 
 # chat input schema
 class ChatRequest(BaseModel):
@@ -131,9 +126,11 @@ def get_user_preferences(uid: str):
 
 @app.post("/chat")
 def chat_with_ai(request: ChatRequest):
-def chat_with_ai(request: ChatRequest):
     try:
-        # Fetch user preferences from Firebase using the correct path
+        uid = request.uid
+        message = request.message
+
+        # Fetch user preferences from Firebase
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
         user_doc = user_ref.get()
         
@@ -148,20 +145,18 @@ def chat_with_ai(request: ChatRequest):
             "location": user_data.get("location", "San Francisco, CA"),
         }
 
-        # Fetch recent chat history (last 5 messages)
-        chat_history = list(chat_collection.find(
+        # Fetch recent history (both chats and shopping lists)
+        history = list(chat_collection.find(
             {
                 "uid": uid,
-                "type": "chat"
-            }, 
-            {"_id": 0, "user_message": 1, "ai_response": 1}
-        ).sort("timestamp", -1).limit(5))
+                "type": {"$in": ["chat", "shopping_list"]}  # Include both types
+            },
+            {"_id": 0, "type": 1, "user_message": 1, "ai_response": 1, "list_data": 1, "timestamp": 1}
+        ).sort("timestamp", -1).limit(5))  # Increased limit to include more context
         
         # Reverse to get chronological order
         history.reverse()
-        history.reverse()
 
-        # Construct messages array with system prompt
         # Construct messages array with system prompt
         messages = [
             {
@@ -219,6 +214,7 @@ def chat_with_ai(request: ChatRequest):
             messages=messages,
             max_tokens=1000,
             temperature=0.7,
+            stream=True
         )
 
         # Collect the streamed response
@@ -246,38 +242,26 @@ def chat_with_ai(request: ChatRequest):
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.get("/directions")
-def get_directions(locations: List[str] = Query(..., description="List of locations including origin, waypoints, and destination")):
+def get_directions(locations: List[str]):
     try:
         if len(locations) < 2:
             raise HTTPException(status_code=400, detail="At least two locations are required")
 
-        origin = locations[0]
-        destination = locations[-1]
-        waypoints = "|".join(locations[1:-1]) if len(locations) > 2 else None
+        base_url = "https://maps.googleapis.com/maps/api/directions/json"
+        waypoints = "|".join(locations[1:-1])
 
         params = {
-            "origin": origin,
-            "destination": destination,
+            "origin": locations[0],
+            "destination": locations[-1],
+            "waypoints": waypoints,
             "key": GOOGLE_MAPS_API_KEY,
         }
-        if waypoints:
-            params["waypoints"] = waypoints  # Add waypoints only if they exist
 
-        response = requests.get("https://maps.googleapis.com/maps/api/directions/json", params=params)
-        
+        response = requests.get(base_url, params=params)
         if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Google Maps API error: {response.status_code}")
+            raise HTTPException(status_code=500, detail="Error fetching directions from Google Maps API")
 
-        data = response.json()
-
-        if "routes" not in data or not data["routes"]:
-            raise HTTPException(status_code=404, detail="No routes found")
-
-        return {
-            "status": "success",
-            "routes": data["routes"],
-            "overview_polyline": data["routes"][0]["overview_polyline"]["points"]
-        }
+        return response.json()
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch directions: {str(e)}")
