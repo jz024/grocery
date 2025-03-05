@@ -12,6 +12,7 @@ import datetime
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
+import stripe
 
 load_dotenv()
 
@@ -19,8 +20,10 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 
 OpenAI.api_key = OPENAI_API_KEY
+stripe.api_key = STRIPE_SECRET_KEY
 
 app = FastAPI()
 
@@ -29,7 +32,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:8081",
         "http://localhost:3000",
-        "https://d375-2601-646-8f80-1110-4c4c-830b-652-52a4.ngrok-free.app"
+        "https://d375-2601-646-8f80-1110-4c4c-830b-652-52a4.ngrok-free.app",
+        "https://accepted-flounder-supreme.ngrok-free.app",
         "*"  # Only use during development
     ],
     allow_credentials=True,
@@ -62,6 +66,16 @@ class UserPreferences(BaseModel):
     foodAllergies: Optional[List[str]] = None
     dietaryPreferences: Optional[List[str]] = None
     preferences: Optional[Dict[str, Any]] = None 
+
+# New CheckoutItem model
+class CheckoutItem(BaseModel):
+    name: str
+    price: float
+    quantity: int
+
+# New CheckoutRequest model
+class CheckoutRequest(BaseModel):
+    items: List[CheckoutItem]
 
 @app.post("/onboarding")
 def update_user_preferences(data: UserPreferences):
@@ -769,7 +783,32 @@ def test_firebase_connection(uid: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Firebase error: {str(e)}")
 
+@app.post("/create-checkout-session")
+async def create_checkout_session(request: CheckoutRequest):
+    try:
+        line_items = [{
+            'price_data': {
+                'currency': 'usd',
+                'product_data': {
+                    'name': item.name,
+                },
+                'unit_amount': int(item.price * 100),  # Convert to cents
+            },
+            'quantity': item.quantity,
+        } for item in request.items]
 
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=line_items,
+            mode='payment',
+            success_url='https://yourdomain.com/success',
+            cancel_url='https://yourdomain.com/cancel',
+        )
+
+        return {"url": session.url}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Add this after creating the FastAPI app
 app.mount("/static", StaticFiles(directory="app/static"), name="static")

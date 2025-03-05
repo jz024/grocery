@@ -17,8 +17,8 @@ POST https://llmaps.site/chat?uid=Y84O1MLwhMRTUISOeKHHJucdCBq2&message=Hello,%20
 Content-Type: application/json
 ###
 ### Test local chat endpoint
-# POST http://localhost:8000/chat
-POST https://d375-2601-646-8f80-1110-4c4c-830b-652-52a4.ngrok-free.app/chat
+# POST http://localhost:8002/chat
+POST  https://79db-2601-646-8f80-1110-9f1-f6ce-2fad-3fa0.ngrok-free.app/chat
 Content-Type: application/json
 
 {
@@ -28,4 +28,22 @@ Content-Type: application/json
 ###
 GET http://localhost:8000/generate-shopping-list/Y84O1MLwhMRTUISOeKHHJucdCBq2
 Accept: application/json
+###
+POST http://localhost:8002/create-checkout-session
+Content-Type: application/json
+
+{
+    "items": [
+        {
+            "name": "Apples",
+            "price": 2.99,
+            "quantity": 1
+        },
+        {
+            "name": "Bread",
+            "price": 3.50,
+            "quantity": 2
+        }
+    ]
+}
 ###
