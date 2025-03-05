@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
 import requests
@@ -192,7 +192,6 @@ def chat_with_ai(request: ChatRequest):
             messages=messages,
             max_tokens=1000,
             temperature=0.7,
-            stream=True
         )
 
         ai_response = completion.choices[0].message.content.strip()
@@ -213,26 +212,38 @@ def chat_with_ai(request: ChatRequest):
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.get("/directions")
-def get_directions(locations: List[str]):
+def get_directions(locations: List[str] = Query(..., description="List of locations including origin, waypoints, and destination")):
     try:
         if len(locations) < 2:
             raise HTTPException(status_code=400, detail="At least two locations are required")
 
-        base_url = "https://maps.googleapis.com/maps/api/directions/json"
-        waypoints = "|".join(locations[1:-1])
+        origin = locations[0]
+        destination = locations[-1]
+        waypoints = "|".join(locations[1:-1]) if len(locations) > 2 else None
 
         params = {
-            "origin": locations[0],
-            "destination": locations[-1],
-            "waypoints": waypoints,
+            "origin": origin,
+            "destination": destination,
             "key": GOOGLE_MAPS_API_KEY,
         }
+        if waypoints:
+            params["waypoints"] = waypoints  # Add waypoints only if they exist
 
-        response = requests.get(base_url, params=params)
+        response = requests.get("https://maps.googleapis.com/maps/api/directions/json", params=params)
+        
         if response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Error fetching directions from Google Maps API")
+            raise HTTPException(status_code=500, detail=f"Google Maps API error: {response.status_code}")
 
-        return response.json()
+        data = response.json()
+
+        if "routes" not in data or not data["routes"]:
+            raise HTTPException(status_code=404, detail="No routes found")
+
+        return {
+            "status": "success",
+            "routes": data["routes"],
+            "overview_polyline": data["routes"][0]["overview_polyline"]["points"]
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch directions: {str(e)}")
