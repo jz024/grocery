@@ -17,8 +17,8 @@ POST https://llmaps.site/chat?uid=Y84O1MLwhMRTUISOeKHHJucdCBq2&message=Hello,%20
 Content-Type: application/json
 ###
 ### Test local chat endpoint
-# POST http://localhost:8002/chat
-POST  https://79db-2601-646-8f80-1110-9f1-f6ce-2fad-3fa0.ngrok-free.app/chat
+POST http://localhost:8002/chat
+# POST  https://79db-2601-646-8f80-1110-9f1-f6ce-2fad-3fa0.ngrok-free.app/chat
 Content-Type: application/json
 
 {

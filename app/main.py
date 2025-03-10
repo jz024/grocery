@@ -13,6 +13,7 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 import stripe
+from motor.motor_asyncio import AsyncIOMotorClient
 
 load_dotenv()
 
@@ -44,7 +45,7 @@ app.add_middleware(
 )
 
 # MongoDB Connection
-mongo_client = MongoClient(MONGODB_URI)
+mongo_client = AsyncIOMotorClient(MONGODB_URI)
 db = mongo_client.grocerydb
 onboarding_collection = db.onboardingData
 chat_collection = db.chatHistory
@@ -78,12 +79,12 @@ class CheckoutRequest(BaseModel):
     items: List[CheckoutItem]
 
 @app.post("/onboarding")
-def update_user_preferences(data: UserPreferences):
+async def update_user_preferences(data: UserPreferences):
     try:
         if not data.uid:
             raise HTTPException(status_code=400, detail="User ID (uid) is required")
 
-        existing_user = onboarding_collection.find_one({"uid": data.uid})
+        existing_user = await onboarding_collection.find_one({"uid": data.uid})
 
         update_fields = {}
 
@@ -106,7 +107,7 @@ def update_user_preferences(data: UserPreferences):
         if not update_fields:
             raise HTTPException(status_code=400, detail="No valid fields provided for update")
 
-        onboarding_collection.update_one(
+        await onboarding_collection.update_one(
             {"uid": data.uid},
             {"$set": update_fields},
             upsert=True
@@ -118,21 +119,21 @@ def update_user_preferences(data: UserPreferences):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.get("/onboarding/{uid}")
-def get_user_preferences(uid: str):
-    user_data = onboarding_collection.find_one({"uid": uid}, {"_id": 0})
+async def get_user_preferences(uid: str):
+    user_data = await onboarding_collection.find_one({"uid": uid}, {"_id": 0})
     if not user_data:
         raise HTTPException(status_code=404, detail="User preferences not found")
     return user_data
 
 @app.post("/chat")
-def chat_with_ai(request: ChatRequest):
+async def chat_with_ai(request: ChatRequest):
     try:
         uid = request.uid
         message = request.message
 
-        # Fetch user preferences from Firebase
+        # Fetch user preferences from Firebase (synchronous operation)
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
-        user_doc = user_ref.get()
+        user_doc = user_ref.get()  # This is synchronous
         
         if not user_doc.exists:
             raise HTTPException(status_code=404, detail="User preferences not found")
@@ -146,14 +147,18 @@ def chat_with_ai(request: ChatRequest):
         }
 
         # Fetch recent history (both chats and shopping lists)
-        history = list(chat_collection.find(
+        cursor = chat_collection.find(
             {
                 "uid": uid,
                 "type": {"$in": ["chat", "shopping_list"]}  # Include both types
             },
             {"_id": 0, "type": 1, "user_message": 1, "ai_response": 1, "list_data": 1, "timestamp": 1}
-        ).sort("timestamp", -1).limit(5))  # Increased limit to include more context
+        ).sort("timestamp", -1).limit(5)  # Increased limit to include more context
         
+        history = []
+        async for doc in cursor:
+            history.append(doc)
+
         # Reverse to get chronological order
         history.reverse()
 
@@ -227,7 +232,7 @@ def chat_with_ai(request: ChatRequest):
         ai_response = ai_response.strip()
 
         # Save chat history
-        chat_collection.insert_one({
+        await chat_collection.insert_one({
             "uid": uid,
             "type": "chat",
             "user_message": message,
@@ -242,7 +247,7 @@ def chat_with_ai(request: ChatRequest):
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.get("/directions")
-def get_directions(locations: List[str]):
+async def get_directions(locations: List[str]):
     try:
         if len(locations) < 2:
             raise HTTPException(status_code=400, detail="At least two locations are required")
@@ -250,14 +255,14 @@ def get_directions(locations: List[str]):
         base_url = "https://maps.googleapis.com/maps/api/directions/json"
         waypoints = "|".join(locations[1:-1])
 
-        params = {
-            "origin": locations[0],
-            "destination": locations[-1],
-            "waypoints": waypoints,
-            "key": GOOGLE_MAPS_API_KEY,
-        }
+        async with httpx.AsyncClient() as client:
+            response = await client.get(base_url, params={
+                "origin": locations[0],
+                "destination": locations[-1],
+                "waypoints": waypoints,
+                "key": GOOGLE_MAPS_API_KEY,
+            })
 
-        response = requests.get(base_url, params=params)
         if response.status_code != 200:
             raise HTTPException(status_code=500, detail="Error fetching directions from Google Maps API")
 
@@ -302,16 +307,20 @@ def checkout(uid: str):
         raise HTTPException(status_code=500, detail=f"Failed to process checkout: {str(e)}")
 
 @app.get("/generate-shopping-list/{uid}")
-def generate_shopping_list(uid: str):
+async def generate_shopping_list(uid: str):
     try:
         # Fetch recent chat history
-        chat_history = list(chat_collection.find(
+        cursor = chat_collection.find(
             {
                 "uid": uid,
                 "type": "chat"
             },
             {"_id": 0, "user_message": 1, "ai_response": 1, "timestamp": 1}
-        ).sort("timestamp", -1).limit(10))
+        ).sort("timestamp", -1).limit(10)
+        
+        chat_history = []
+        async for doc in cursor:
+            chat_history.append(doc)
 
         if not chat_history:
             return {"locations": [], "items": []}
@@ -400,7 +409,7 @@ def generate_shopping_list(uid: str):
                 shopping_list["store_recommendations"] = store_recommendations
 
             # Save the complete shopping list with store recommendations to MongoDB
-            chat_collection.insert_one({
+            await chat_collection.insert_one({
                 "uid": uid,
                 "type": "shopping_list",
                 "list_data": shopping_list,
@@ -417,12 +426,12 @@ def generate_shopping_list(uid: str):
         print(f"Shopping list generation error: {str(e)}")
         return {"items": []}
 
-def find_stores_for_items(uid: str, items: list) -> dict:
+async def find_stores_for_items(uid: str, items: list) -> dict:
     """Helper function to find stores where items can be purchased"""
     try:
-        # Get user location
+        # Get user location (synchronous Firebase operation)
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
-        user_doc = user_ref.get()
+        user_doc = user_ref.get()  # This is synchronous
         
         if not user_doc.exists or not user_doc.to_dict().get("location"):
             return None
@@ -473,8 +482,11 @@ def find_stores_for_items(uid: str, items: list) -> dict:
             "Content-Type": "application/json"
         }
 
-        response = requests.post(url, json=payload, headers=headers)
-        if not response.ok:
+        # Use aiohttp or httpx for async HTTP requests
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=headers)
+            
+        if not response.status_code == 200:
             return None
 
         response_data = response.json()
@@ -618,7 +630,7 @@ async def test_store_search(uid: str):
             )
 
         # Save the results
-        chat_collection.insert_one({
+        await chat_collection.insert_one({
             "uid": uid,
             "type": "store_search",
             "original_items": items,
@@ -792,11 +804,12 @@ async def create_checkout_session(request: CheckoutRequest):
                 'product_data': {
                     'name': item.name,
                 },
-                'unit_amount': int(item.price * 100),  # Convert to cents
+                'unit_amount': int(item.price * 100),
             },
             'quantity': item.quantity,
         } for item in request.items]
 
+        # Use synchronous Stripe API call
         session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             line_items=line_items,
