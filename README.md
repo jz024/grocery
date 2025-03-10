@@ -2,9 +2,11 @@
 ## Requirements
 
 - Python 3.8+
-- MongoDB (Optional if store data persistence is desired)
+- MongoDB
 - Google Maps Places API Key
 - OpenAI API Key
+- Perplexity API Key
+- Firebase
 
 ---
 
@@ -34,6 +36,17 @@
 5. Add it to your `.env` file:
    ```plaintext
    OPENAI_API_KEY=your_openai_api_key
+   ```
+
+### 3. **Perplexity API Key Setup**
+
+1. Go to the [Perplexity API page](https://www.perplexity.ai/).  
+2. Log in or sign up if you don’t already have an account.  
+3. Navigate to **API Keys** under your account settings.  
+4. Create a new API key and copy it.  
+5. Add it to your `.env` file:  
+   ```plaintext
+   PERPLEXITY_API_KEY=your_perplexity_api_key
    ```
 
 
@@ -69,6 +82,8 @@
    OPENAI_API_KEY=your_openai_api_key
    GOOGLE_MAPS_API_KEY=your_google_maps_api_key
    MONGODB_URI=your_mongodb_connection_uri
+   PERPLEXITY_API_KEY=your_perplexity_api_key
+   FIREBASE_SERVICE_ACCOUNT_PATH=you_firebase_credential_file
    ```
 
 ---
@@ -80,7 +95,5 @@ Start the FastAPI server:
 ```bash
 uvicorn main:app --reload
 ```
-
-The API will be available at [http://localhost:8000](http://localhost:8000).
 
 ---
