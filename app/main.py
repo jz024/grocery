@@ -15,6 +15,7 @@ from firebase_admin import credentials, firestore
 import stripe
 from motor.motor_asyncio import AsyncIOMotorClient
 import httpx
+import uuid
 
 load_dotenv()
 
@@ -82,6 +83,36 @@ class CheckoutRequest(BaseModel):
 # New ImageSearchRequest model
 class ImageSearchRequest(BaseModel):
     query: str
+
+# Add these new models
+class Ingredient(BaseModel):
+    id: str
+    name: str
+    quantity: Optional[str] = None
+
+class DietaryInfo(BaseModel):
+    isVegetarian: bool
+    isVegan: bool
+    isGlutenFree: bool
+    isDairyFree: bool
+
+class MenuItem(BaseModel):
+    id: Optional[str] = None
+    name: str
+    description: str
+    image: Optional[str] = None
+    ingredients: List[Ingredient]
+    dietaryInfo: DietaryInfo
+    rating: float
+
+# Update the GenerateMenuRequest model
+class GenerateMenuRequest(BaseModel):
+    uid: str
+    cuisine_type: Optional[str] = None
+    dietary_preferences: Optional[List[str]] = None
+    excluded_ingredients: Optional[List[str]] = None
+    included_ingredients: Optional[List[str]] = None  # New field
+    meal_count: Optional[int] = 10  # Default to 10 meals
 
 @app.post("/onboarding")
 async def update_user_preferences(data: UserPreferences):
@@ -880,6 +911,290 @@ async def search_image(request: ImageSearchRequest):
         raise HTTPException(status_code=500, detail=f"Network error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Update the generate_menu endpoint
+@app.post("/api/generate-menu")
+async def generate_menu(request: GenerateMenuRequest):
+    try:
+        print(f"\n=== Starting Menu Generation for User {request.uid} ===")
+        print("Request Parameters:", json.dumps(request.dict(), indent=2))
+
+        # Verify user exists in Firebase
+        user_ref = db_firebase.collection('users').document(request.uid)
+        user_doc = user_ref.get()
+        
+        if not user_doc.exists:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Create OpenAI client
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        print("\nCreated OpenAI client")
+
+        # Create smaller batches for recipe generation
+        batch_size = 5
+        total_recipes = []
+        
+        for batch in range(0, request.meal_count, batch_size):
+            current_batch_size = min(batch_size, request.meal_count - batch)
+            print(f"\nGenerating batch {batch//batch_size + 1} ({current_batch_size} recipes)")
+
+            try:
+                completion = client.chat.completions.create(
+                    model="gpt-4-0125-preview",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a JSON-generating chef. Return only valid JSON arrays."
+                        },
+                        {
+                            "role": "user",
+                            "content": f"""Generate {current_batch_size} unique recipes matching:
+                                Cuisine: {request.cuisine_type or 'Any'}
+                                Dietary: {request.dietary_preferences or []}
+                                Include: {request.included_ingredients or []}
+                                Exclude: {request.excluded_ingredients or []}
+
+                                Return as JSON array: [{{
+                                    "name": "string",
+                                    "description": "string",
+                                    "ingredients": [
+                                        {{"id": "string", "name": "string", "quantity": "string"}}
+                                    ],
+                                    "dietaryInfo": {{
+                                        "isVegetarian": boolean,
+                                        "isVegan": boolean,
+                                        "isGlutenFree": boolean,
+                                        "isDairyFree": boolean
+                                    }}
+                                }}]"""
+                        }
+                    ],
+                    max_tokens=4000,
+                    temperature=0.7
+                )
+
+                response = completion.choices[0].message.content.strip()
+                print(f"\nReceived response of length: {len(response)}")
+
+                # Clean response
+                try:
+                    # Remove any markdown formatting
+                    if '```' in response:
+                        response = '\n'.join(line for line in response.split('\n') 
+                                           if not line.startswith('```'))
+
+                    # Ensure valid JSON array
+                    if not response.startswith('['):
+                        response = '[' + response
+                    if not response.endswith(']'):
+                        response = response + ']'
+
+                    batch_recipes = json.loads(response)
+                    print(f"Successfully parsed {len(batch_recipes)} recipes from batch")
+                    total_recipes.extend(batch_recipes)
+
+                except json.JSONDecodeError as e:
+                    print(f"JSON Parse Error in batch: {str(e)}")
+                    print("Problematic response:", response)
+                    continue
+
+            except Exception as e:
+                print(f"Error generating batch: {str(e)}")
+                continue
+
+        if not total_recipes:
+            raise HTTPException(status_code=500, detail="Failed to generate any valid recipes")
+
+        # Process all successfully generated recipes
+        menu_items = []
+        for recipe in total_recipes:
+            try:
+                # Generate image URL
+                image_result = await search_image(
+                    ImageSearchRequest(query=f"{recipe['name']} food dish")
+                )
+                
+                # Create menu item
+                menu_item = MenuItem(
+                    id=str(uuid.uuid4()),
+                    name=recipe["name"],
+                    description=recipe["description"],
+                    image=image_result.get("imageUrl"),
+                    ingredients=recipe["ingredients"],
+                    dietaryInfo=recipe["dietaryInfo"],
+                    rating=4.5
+                )
+
+                # Store in Firebase
+                menu_ref = db_firebase.collection('users').document(request.uid)\
+                    .collection('menu_items').document(menu_item.id)
+                menu_ref.set(menu_item.dict())
+                
+                menu_items.append(menu_item.dict())
+                print(f"Created menu item: {menu_item.name}")
+
+            except Exception as e:
+                print(f"Error processing recipe {recipe.get('name', 'unknown')}: {str(e)}")
+                continue
+
+        print(f"\n=== Generated {len(menu_items)} menu items successfully ===")
+        return {
+            "message": f"Generated {len(menu_items)} menu items",
+            "menu_items": menu_items
+        }
+
+    except Exception as e:
+        print(f"\n=== Error generating menu ===")
+        print(f"Type: {type(e)}")
+        print(f"Details: {str(e)}")
+        if hasattr(e, '__traceback__'):
+            import traceback
+            traceback.print_tb(e.__traceback__)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/menu-items/{uid}")
+async def get_menu_items(uid: str):
+    """Retrieve all menu items for a specific user from Firebase"""
+    try:
+        menu_items = []
+        menu_ref = db_firebase.collection('users').document(uid).collection('menu_items')
+        docs = menu_ref.stream()
+        
+        for doc in docs:
+            item_data = doc.to_dict()
+            menu_items.append(item_data)
+
+        return menu_items
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch menu items: {str(e)}")
+
+@app.delete("/api/menu-items/{uid}/{item_id}")
+async def delete_menu_item(uid: str, item_id: str):
+    """Delete a specific menu item"""
+    try:
+        menu_ref = db_firebase.collection('users').document(uid).collection('menu_items').document(item_id)
+        if not (await menu_ref.get()).exists:
+            raise HTTPException(status_code=404, detail="Menu item not found")
+        
+        await menu_ref.delete()
+        return {"message": "Menu item deleted successfully"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete menu item: {str(e)}")
+
+@app.get("/debug/firebase-users")
+async def debug_firebase_users():
+    """Debug endpoint to list first 5 users in Firebase"""
+    try:
+        print("\n=== Starting Firebase Users Debug ===")
+        
+        # Get users collection reference
+        users_ref = db_firebase.collection('users')
+        
+        print("\nAttempting to list all users...")
+        users = users_ref.limit(5).stream()  # Limit to first 5 users
+        
+        debug_info = {
+            "user_count": 0,
+            "users": []
+        }
+        
+        print("\nProcessing users:")
+        for user in users:
+            user_data = {
+                "user_id": user.id,
+                "exists": user.exists,
+                "path": user.reference.path,
+            }
+            
+            # Check for preferences
+            prefs_ref = user.reference.collection('AllAboutUser').document('preferences')
+            prefs_doc = prefs_ref.get()
+            user_data["has_preferences"] = prefs_doc.exists
+            
+            if prefs_doc.exists:
+                user_data["preferences"] = prefs_doc.to_dict()
+            
+            print(f"\nUser {user.id}:")
+            print(f"- Path: {user.reference.path}")
+            print(f"- Has preferences: {prefs_doc.exists}")
+            
+            # Check for menu items
+            menu_items = user.reference.collection('menu_items').stream()
+            menu_items_list = [item.to_dict() for item in menu_items]
+            user_data["menu_items_count"] = len(menu_items_list)
+            
+            print(f"- Menu items count: {user_data['menu_items_count']}")
+            
+            debug_info["users"].append(user_data)
+            debug_info["user_count"] += 1
+        
+        print(f"\nTotal users found: {debug_info['user_count']}")
+        
+        # Add collection names debug
+        collections = db_firebase.collections()
+        debug_info["available_collections"] = [col.id for col in collections]
+        print(f"\nAvailable collections: {debug_info['available_collections']}")
+        
+        return debug_info
+
+    except Exception as e:
+        error_msg = f"Firebase debug error: {str(e)}"
+        print(f"\n=== ERROR ===\n{error_msg}")
+        print(f"Error type: {type(e)}")
+        if hasattr(e, '__traceback__'):
+            import traceback
+            print("Traceback:")
+            traceback.print_tb(e.__traceback__)
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/debug/create-test-user")
+async def create_test_user():
+    """Create a test user in Firebase to verify write access"""
+    try:
+        print("\n=== Creating Test User ===")
+        
+        # Generate test user ID
+        test_uid = f"test_user_{uuid.uuid4().hex[:8]}"
+        
+        # Create user document
+        user_ref = db_firebase.collection('users').document(test_uid)
+        
+        # Create test user data
+        user_data = {
+            "created_at": datetime.datetime.now(),
+            "test_field": True
+        }
+        
+        # Create preferences data
+        preferences_data = {
+            "cuisinePreferences": ["Italian", "Japanese"],
+            "foodAllergies": ["Nuts"],
+            "dietaryPreferences": ["Vegetarian"],
+            "location": "San Diego, CA"
+        }
+        
+        print(f"\nAttempting to create user: {test_uid}")
+        print("Writing user document...")
+        user_ref.set(user_data)
+        
+        print("Writing preferences document...")
+        prefs_ref = user_ref.collection('AllAboutUser').document('preferences')
+        prefs_ref.set(preferences_data)
+        
+        return {
+            "message": "Test user created successfully",
+            "uid": test_uid,
+            "user_data": user_data,
+            "preferences": preferences_data
+        }
+
+    except Exception as e:
+        print(f"\n=== ERROR Creating Test User ===")
+        print(f"Error type: {type(e)}")
+        print(f"Error details: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create test user: {str(e)}")
 
 # Add this after creating the FastAPI app
 app.mount("/static", StaticFiles(directory="app/static"), name="static")

@@ -88,3 +88,4 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+dsc180ab-firebase-adminsdk-fbsvc-22f36742fe.json

@@ -53,3 +53,25 @@ Content-Type: application/json
 {
     "query": "apple fruit"
 }
+###
+# POST http://localhost:8002/api/generate-menu
+POST https://ff5c-73-162-153-137.ngrok-free.app/api/generate-menu
+Content-Type: application/json
+
+{
+    "uid": "RQuf6PkpqlUJmml5fzmkNQXrBHu2",
+    "cuisine_type": "Italian",
+    "dietary_preferences": ["vegetarian"],
+    "excluded_ingredients": ["mushrooms"],
+    "included_ingredients": ["tomatoes", "basil"],
+    "meal_count": 10
+}
+###
+GET http://localhost:8002/debug/firebase-users
+Accept: application/json
+### Create test user
+POST http://localhost:8002/debug/create-test-user
+Accept: application/json
+### Debug Firebase users
+GET http://localhost:8002/debug/firebase-users
+Accept: application/json
