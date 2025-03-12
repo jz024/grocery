@@ -14,6 +14,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import stripe
 from motor.motor_asyncio import AsyncIOMotorClient
+import httpx
 
 load_dotenv()
 
@@ -77,6 +78,10 @@ class CheckoutItem(BaseModel):
 # New CheckoutRequest model
 class CheckoutRequest(BaseModel):
     items: List[CheckoutItem]
+
+# New ImageSearchRequest model
+class ImageSearchRequest(BaseModel):
+    query: str
 
 @app.post("/onboarding")
 async def update_user_preferences(data: UserPreferences):
@@ -820,6 +825,59 @@ async def create_checkout_session(request: CheckoutRequest):
 
         return {"url": session.url}
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/search-image")
+async def search_image(request: ImageSearchRequest):
+    """Search for an image using Google Custom Search API"""
+    try:
+        if not request.query:
+            raise HTTPException(status_code=400, detail="Query field is required")
+
+        API_KEY = os.getenv("GOOGLE_API_KEY")
+        CX = os.getenv("GOOGLE_CX")
+
+        if not API_KEY or not CX:
+            raise HTTPException(
+                status_code=500, 
+                detail="Google API configuration missing"
+            )
+
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            "q": request.query,
+            "cx": CX,
+            "searchType": "image",
+            "key": API_KEY,
+            "num": 1
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params)
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail="Error fetching image from Google API"
+                )
+
+            data = response.json()
+            image_url = data.get("items", [{}])[0].get("link") if data.get("items") else None
+
+            if not image_url:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No image found for the query"
+                )
+
+            return {
+                "query": request.query,
+                "imageUrl": image_url
+            }
+
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=f"Network error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

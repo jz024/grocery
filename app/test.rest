@@ -46,4 +46,10 @@ Content-Type: application/json
         }
     ]
 }
-###
+### Test image search
+POST http://localhost:8002/api/search-image
+Content-Type: application/json
+
+{
+    "query": "apple fruit"
+}
