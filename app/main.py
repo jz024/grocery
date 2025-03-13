@@ -361,52 +361,61 @@ async def generate_shopping_list(uid: str):
         if not chat_history:
             return {"locations": [], "items": []}
 
-        # Update user preferences based on chat history
-        current_preferences = update_preferences_from_history(uid, chat_history)
-
-        # Now continue with shopping list generation using updated preferences
-        formatted_chats = "\n".join([
-            f"User: {chat['user_message']}\nAssistant: {chat['ai_response']}"
+        # Get user preferences from Firebase
+        user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
+        user_doc = user_ref.get()
+        
+        if not user_doc.exists:
+            return {"items": [], "error": "User preferences not found"}
+        
+        user_prefs = user_doc.to_dict()
+        
+        # Construct the prompt
+        chat_context = "\n".join([
+            f"User: {chat.get('user_message', '')}\nAssistant: {chat.get('ai_response', '')}"
             for chat in reversed(chat_history)
         ])
 
-        # Construct prompt for shopping list generation
         prompt = f"""
-        Based on the following conversation history and user preferences, create a shopping list.
-        The list should include all of the items that the user needs to purchase to cook the meal reccomended to them. 
-        This should not include any items that were mentioned for other options that the user did not choose.
-        Only include items that were specifically discussed or recommended in the conversation.
-        If prices were mentioned, include them; otherwise, estimate reasonable prices.
+        Based on this conversation history and user preferences, generate a shopping list.
         
         User Preferences:
-        {json.dumps(current_preferences, indent=2)}  
+        - Cuisine Preferences: {', '.join(user_prefs.get('cuisinePreferences', []))}
+        - Food Allergies: {', '.join(user_prefs.get('foodAllergies', []))}
+        - Dietary Preferences: {', '.join(user_prefs.get('dietaryPreferences', []))}
+        - Location: {user_prefs.get('location', 'Unknown')}
 
-        Conversation History:
-        {formatted_chats}
+        Recent Conversation:
+        {chat_context}
 
-        Return a valid JSON object with exactly this structure:
+        Generate a shopping list in this exact JSON format:
         {{
             "items": [
-                {{"name": "item1", "price": 0.00}},
-                {{"name": "item2", "price": 0.00}}
+                {{
+                    "name": "Item name",
+                    "price": estimated_price_in_dollars
+                }}
             ]
         }}
 
-        Important:
-        1. Ensure the response is valid JSON
-        2. Use only double quotes for strings
-        3. Use numbers without quotes for prices
-        4. Include at least one store and one item
-        5. If no specific items were discussed, return an empty list
-        6. Do not include any comments or explanations, only the JSON object
-        
+        Requirements:
+        1. Include all necessary ingredients mentioned in the conversation
+        2. Respect dietary restrictions and allergies
+        3. Use realistic price estimates
+        4. Group similar items together
+        5. Return only the JSON object, no additional text
         """
 
+        print("\nGenerating shopping list...")
+        print(f"User ID: {uid}")
+        print(f"Chat history length: {len(chat_history)}")
+
+        # Generate list using OpenAI
         client = OpenAI()
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4-0125-preview",
             messages=[
-                {"role": "system", "content": "You are a JSON-generating assistant that creates shopping lists. Always return valid JSON without any additional text or comments."},
+                {"role": "system", "content": "You are a JSON-generating assistant that creates shopping lists."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=1000,
@@ -415,20 +424,33 @@ async def generate_shopping_list(uid: str):
 
         # Get the response and clean it
         response_text = completion.choices[0].message.content.strip()
+        print("\nReceived response from OpenAI")
         
-        # Try to parse the JSON
         try:
-            shopping_list = json.loads(response_text)
+            # Clean the response by removing markdown formatting
+            if '```json' in response_text:
+                # Extract the JSON content between markdown tags
+                start_idx = response_text.find('```json') + 7
+                end_idx = response_text.rfind('```')
+                if end_idx == -1:
+                    end_idx = len(response_text)
+                response_text = response_text[start_idx:end_idx].strip()
             
-            # Validate the structure
+            print("\nCleaned response:")
+            print(response_text)
+            
+            shopping_list = json.loads(response_text)
+            print(f"Successfully parsed shopping list with {len(shopping_list.get('items', []))} items")
+            
+            # Validate and clean shopping list
             if not isinstance(shopping_list, dict):
+                print("Response is not a dictionary")
                 return {"items": []}
             
-            # Ensure required fields exist
             shopping_list.setdefault("items", [])
             
-            # Validate types
             if not isinstance(shopping_list["items"], list):
+                print("Items is not a list")
                 shopping_list["items"] = []
             
             valid_items = []
@@ -436,26 +458,39 @@ async def generate_shopping_list(uid: str):
                 if isinstance(item, dict) and "name" in item and "price" in item:
                     if isinstance(item["name"], str) and isinstance(item["price"], (int, float)):
                         valid_items.append(item)
+                        print(f"Added valid item: {item['name']}")
             
             shopping_list["items"] = valid_items
+            print("Validated shopping list items")
 
-            # Get store recommendations for the items
-            store_recommendations = find_stores_for_items(uid, valid_items)
-            if store_recommendations:
-                shopping_list["store_recommendations"] = store_recommendations
-
-            # Save the complete shopping list with store recommendations to MongoDB
-            await chat_collection.insert_one({
+            # Get store recommendations
+            print("Getting store recommendations...")
+            store_recommendations = await find_stores_for_items(uid, valid_items)
+            
+            # Create final document for MongoDB
+            mongo_doc = {
                 "uid": uid,
                 "type": "shopping_list",
-                "list_data": shopping_list,
-                "store_recommendations": store_recommendations,
+                "list_data": {
+                    "items": shopping_list["items"],
+                    "store_recommendations": store_recommendations if store_recommendations else {}
+                },
                 "timestamp": datetime.datetime.now()
-            })
+            }
 
-            return shopping_list
+            # Save to MongoDB
+            print("Saving to MongoDB...")
+            await chat_collection.insert_one(mongo_doc)
+            print("Shopping list saved successfully")
 
-        except json.JSONDecodeError:
+            return {
+                "items": shopping_list["items"],
+                "store_recommendations": store_recommendations if store_recommendations else {}
+            }
+
+        except json.JSONDecodeError as e:
+            print(f"Failed to parse shopping list JSON: {str(e)}")
+            print(f"Raw response: {response_text}")
             return {"items": []}
 
     except Exception as e:
@@ -465,12 +500,12 @@ async def generate_shopping_list(uid: str):
 async def find_stores_for_items(uid: str, items: list) -> dict:
     """Helper function to find stores where items can be purchased"""
     try:
-        # Get user location (synchronous Firebase operation)
+        # Get user location
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
-        user_doc = user_ref.get()  # This is synchronous
+        user_doc = user_ref.get()
         
         if not user_doc.exists or not user_doc.to_dict().get("location"):
-            return None
+            return {}
 
         location = user_doc.to_dict()["location"]
         items_text = ", ".join([item["name"] for item in items])
@@ -489,12 +524,6 @@ async def find_stores_for_items(uid: str, items: list) -> dict:
                 }}
             ]
         }}
-        Requirements:
-        1. Only include real stores that actually exist at this location: {location}
-        2. Include complete store addresses with zip codes
-        3. Group items by store where they're most likely to be found
-        4. Only include major grocery stores and specialty stores that definitely exist at this location
-        Do not include any other text.
         """
 
         # Make Perplexity API call
@@ -504,7 +533,7 @@ async def find_stores_for_items(uid: str, items: list) -> dict:
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a store finder that returns only JSON data about stores and their available items."
+                    "content": "You are a store finder that returns only JSON data."
                 },
                 {
                     "role": "user",
@@ -518,30 +547,30 @@ async def find_stores_for_items(uid: str, items: list) -> dict:
             "Content-Type": "application/json"
         }
 
-        # Use aiohttp or httpx for async HTTP requests
+        # Use httpx for async HTTP requests
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, headers=headers)
             
-        if not response.status_code == 200:
-            return None
+            if response.status_code != 200:
+                return {}
 
-        response_data = response.json()
-        store_data = response_data["choices"][0]["message"]["content"]
-        store_data = store_data.replace('```json\n', '').replace('\n```', '').strip()
-        
-        if isinstance(store_data, str):
+            response_data = response.json()
+            store_data = response_data["choices"][0]["message"]["content"]
+            
+            # Clean and parse store data
+            store_data = store_data.replace('```json\n', '').replace('\n```', '').strip()
+            
             try:
-                store_data = json.loads(store_data)
-                return store_data
+                return json.loads(store_data)
             except json.JSONDecodeError:
-                return None
+                return {}
 
-        return None
+        return {}
 
     except Exception as e:
         print(f"Error finding stores: {str(e)}")
-        return None
-    
+        return {}
+
 @app.get("/test-store-search/{uid}")
 async def test_store_search(uid: str):
     try:

@@ -75,3 +75,5 @@ Accept: application/json
 ### Debug Firebase users
 GET http://localhost:8002/debug/firebase-users
 Accept: application/json
+###
+GET http://localhost:8002/generate-shopping-list/gskCM4FzLfd2f6QDm1XRhipIsLg2
