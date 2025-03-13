@@ -962,135 +962,142 @@ async def search_image(request: ImageSearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 # Update the generate_menu endpoint
-@app.post("/api/generate-menu")
-async def generate_menu(request: GenerateMenuRequest):
+@app.post("/api/generate-menu/{uid}")
+async def generate_menu(uid: str):
+    """Generate a menu based on user preferences"""
     try:
-        print(f"\n=== Starting Menu Generation for User {request.uid} ===")
-        print("Request Parameters:", json.dumps(request.dict(), indent=2))
+        print(f"\n=== Starting Menu Generation for User {uid} ===")
 
-        # Verify user exists in Firebase
-        user_ref = db_firebase.collection('users').document(request.uid)
-        user_doc = user_ref.get()
-        
-        if not user_doc.exists:
-            raise HTTPException(status_code=404, detail="User not found")
+        # Fetch user preferences from Firebase
+        user_ref = db_firebase.collection('users').document(uid)
+        user_prefs = user_ref.collection('AllAboutUser').document('preferences').get()
+
+        if not user_prefs.exists:
+            raise HTTPException(status_code=404, detail="User preferences not found")
+
+        preferences = user_prefs.to_dict()
+        print("\nUser Preferences:", json.dumps(preferences, indent=2))
 
         # Create OpenAI client
         client = OpenAI(api_key=OPENAI_API_KEY)
-        print("\nCreated OpenAI client")
 
-        # Create smaller batches for recipe generation
-        batch_size = 5
-        total_recipes = []
-        
-        for batch in range(0, request.meal_count, batch_size):
-            current_batch_size = min(batch_size, request.meal_count - batch)
-            print(f"\nGenerating batch {batch//batch_size + 1} ({current_batch_size} recipes)")
+        # Generate menu items
+        print("\nGenerating menu with OpenAI...")
+        completion = client.chat.completions.create(
+            model="gpt-4-0125-preview",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a culinary expert. Generate a valid JSON menu of dishes."
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+                    Create a menu for a user with these preferences:
+                    - Cuisine Preferences: {preferences.get('cuisinePreferences', [])}
+                    - Dietary Preferences: {preferences.get('dietaryPreferences', [])}
+                    - Food Allergies: {preferences.get('foodAllergies', [])}
+                    - Location: {preferences.get('location', 'Unknown')}
 
-            try:
-                completion = client.chat.completions.create(
-                    model="gpt-4-0125-preview",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a JSON-generating chef. Return only valid JSON arrays."
-                        },
-                        {
-                            "role": "user",
-                            "content": f"""Generate {current_batch_size} unique recipes matching:
-                                Cuisine: {request.cuisine_type or 'Any'}
-                                Dietary: {request.dietary_preferences or []}
-                                Include: {request.included_ingredients or []}
-                                Exclude: {request.excluded_ingredients or []}
+                    Return ONLY a JSON object with this exact structure:
+                    {{
+                        "menuItems": [
+                            {{
+                                "id": "1",
+                                "name": "Dish Name",
+                                "description": "Dish description",
+                                "image": "Image URL",
+                                "ingredients": [
+                                    {{"id": "1", "name": "Ingredient Name"}}
+                                ],
+                                "dietaryInfo": {{
+                                    "isVegetarian": false,
+                                    "isVegan": false,
+                                    "isGlutenFree": false,
+                                    "isDairyFree": false
+                                }},
+                                "rating": 4.5
+                            }}
+                        ]
+                    }}
 
-                                Return as JSON array: [{{
-                                    "name": "string",
-                                    "description": "string",
-                                    "ingredients": [
-                                        {{"id": "string", "name": "string", "quantity": "string"}}
-                                    ],
-                                    "dietaryInfo": {{
-                                        "isVegetarian": boolean,
-                                        "isVegan": boolean,
-                                        "isGlutenFree": boolean,
-                                        "isDairyFree": boolean
-                                    }}
-                                }}]"""
-                        }
-                    ],
-                    max_tokens=4000,
-                    temperature=0.7
-                )
+                    Requirements:
+                    1. Generate at least 10 menu items
+                    2. Each item should have 5 ingredients
+                    3. Ensure all items respect dietary restrictions
+                    4. Use realistic descriptions and ratings
+                    5. Ensure all IDs are unique strings
+                    6. Return only the JSON object, no additional text
+                    """
+                }
+            ],
+            max_tokens=4000,
+            temperature=0.7
+        )
 
-                response = completion.choices[0].message.content.strip()
-                print(f"\nReceived response of length: {len(response)}")
+        # Get and clean the response
+        response = completion.choices[0].message.content.strip()
+        print("\nReceived response from OpenAI")
+        print("Response length:", len(response))
 
-                # Clean response
+        try:
+            # Clean the response
+            if '```json' in response:
+                response = response.split('```json')[-1].split('```')[0].strip()
+            
+            print("\nAttempting to parse JSON...")
+            menu_data = json.loads(response)
+            
+            # Validate the structure
+            if not isinstance(menu_data, dict):
+                raise ValueError("Response is not a dictionary")
+            if 'menuItems' not in menu_data:
+                raise ValueError("Missing required field: menuItems")
+            
+            print(f"\nValidated {len(menu_data['menuItems'])} menu items")
+
+            # Generate images for menu items
+            print("\nGenerating images for menu items...")
+            for item in menu_data['menuItems']:
                 try:
-                    # Remove any markdown formatting
-                    if '```' in response:
-                        response = '\n'.join(line for line in response.split('\n') 
-                                           if not line.startswith('```'))
+                    image_result = await search_image(
+                        ImageSearchRequest(query=f"{item['name']} dish")
+                    )
+                    item['image'] = image_result.get('imageUrl')
+                    print(f"Added image for menu item: {item['name']}")
+                except Exception as img_error:
+                    print(f"Error getting image for menu item {item['name']}: {str(img_error)}")
+                    item['image'] = None
 
-                    # Ensure valid JSON array
-                    if not response.startswith('['):
-                        response = '[' + response
-                    if not response.endswith(']'):
-                        response = response + ']'
+            # Store in Firebase
+            print("\nStoring menu in Firebase...")
+            menu_ref = user_ref.collection('menu')
+            
+            # Store menu items
+            menu_doc = menu_ref.document('items')
+            menu_doc.set({"items": menu_data['menuItems']})
+            print("Stored menu items in Firebase")
 
-                    batch_recipes = json.loads(response)
-                    print(f"Successfully parsed {len(batch_recipes)} recipes from batch")
-                    total_recipes.extend(batch_recipes)
+            print("\n=== Menu Generation Complete ===")
+            return {
+                "message": "Menu generated successfully",
+                "menuItems": menu_data['menuItems']
+            }
 
-                except json.JSONDecodeError as e:
-                    print(f"JSON Parse Error in batch: {str(e)}")
-                    print("Problematic response:", response)
-                    continue
-
-            except Exception as e:
-                print(f"Error generating batch: {str(e)}")
-                continue
-
-        if not total_recipes:
-            raise HTTPException(status_code=500, detail="Failed to generate any valid recipes")
-
-        # Process all successfully generated recipes
-        menu_items = []
-        for recipe in total_recipes:
-            try:
-                # Generate image URL
-                image_result = await search_image(
-                    ImageSearchRequest(query=f"{recipe['name']} food dish")
-                )
-                
-                # Create menu item
-                menu_item = MenuItem(
-                    id=str(uuid.uuid4()),
-                    name=recipe["name"],
-                    description=recipe["description"],
-                    image=image_result.get("imageUrl"),
-                    ingredients=recipe["ingredients"],
-                    dietaryInfo=recipe["dietaryInfo"],
-                    rating=4.5
-                )
-
-                # Store in Firebase
-                menu_ref = db_firebase.collection('users').document(request.uid)\
-                    .collection('menu_items').document(menu_item.id)
-                menu_ref.set(menu_item.dict())
-                
-                menu_items.append(menu_item.dict())
-                print(f"Created menu item: {menu_item.name}")
-
-            except Exception as e:
-                print(f"Error processing recipe {recipe.get('name', 'unknown')}: {str(e)}")
-                continue
-
-        print(f"\n=== Generated {len(menu_items)} menu items successfully ===")
-        return {
-            "message": f"Generated {len(menu_items)} menu items",
-            "menu_items": menu_items
-        }
+        except json.JSONDecodeError as e:
+            print(f"\nJSON Parse Error: {str(e)}")
+            print("Raw response:", response)
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to parse menu data: {str(e)}"
+            )
+        except ValueError as e:
+            print(f"\nValidation Error: {str(e)}")
+            print("Parsed data:", menu_data)
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Invalid menu data: {str(e)}"
+            )
 
     except Exception as e:
         print(f"\n=== Error generating menu ===")
@@ -1101,22 +1108,26 @@ async def generate_menu(request: GenerateMenuRequest):
             traceback.print_tb(e.__traceback__)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/menu-items/{uid}")
-async def get_menu_items(uid: str):
-    """Retrieve all menu items for a specific user from Firebase"""
+# Add endpoint to retrieve menu
+@app.get("/api/menu/{uid}")
+async def get_menu(uid: str):
+    """Retrieve user's generated menu"""
     try:
-        menu_items = []
-        menu_ref = db_firebase.collection('users').document(uid).collection('menu_items')
-        docs = menu_ref.stream()
+        menu_ref = db_firebase.collection('users').document(uid).collection('menu').document('items')
         
-        for doc in docs:
-            item_data = doc.to_dict()
-            menu_items.append(item_data)
-
-        return menu_items
+        # Get menu items
+        menu_doc = menu_ref.get()
+        print("\nFetching menu items from Firebase...")
+        print(f"Menu exists: {menu_doc.exists}")
+        if not menu_doc.exists:
+            raise HTTPException(status_code=404, detail="Menu not found")
+            
+        return {
+            "menuItems": menu_doc.to_dict()['items']
+        }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch menu items: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch menu: {str(e)}")
 
 @app.delete("/api/menu-items/{uid}/{item_id}")
 async def delete_menu_item(uid: str, item_id: str):
