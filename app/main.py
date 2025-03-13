@@ -114,6 +114,26 @@ class GenerateMenuRequest(BaseModel):
     included_ingredients: Optional[List[str]] = None  # New field
     meal_count: Optional[int] = 10  # Default to 10 meals
 
+# Add new models for categories
+class Subcategory(BaseModel):
+    id: str
+    name: str
+
+class Category(BaseModel):
+    id: str
+    name: str
+    image: Optional[str] = None
+    subcategories: List[str]
+
+class Product(BaseModel):
+    id: str
+    name: str
+    price: float
+    image: Optional[str] = None
+    description: str
+    category: str
+    subcategory: str
+
 @app.post("/onboarding")
 async def update_user_preferences(data: UserPreferences):
     try:
@@ -1224,6 +1244,195 @@ async def create_test_user():
         print(f"Error type: {type(e)}")
         print(f"Error details: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to create test user: {str(e)}")
+
+@app.post("/api/generate-categories/{uid}")
+async def generate_categories(uid: str):
+    """Generate categorized product listings based on user preferences"""
+    try:
+        print(f"\n=== Starting Category Generation for User {uid} ===")
+
+        # Fetch user preferences from Firebase
+        user_ref = db_firebase.collection('users').document(uid)
+        user_prefs = user_ref.collection('AllAboutUser').document('preferences').get()
+
+        if not user_prefs.exists:
+            raise HTTPException(status_code=404, detail="User preferences not found")
+
+        preferences = user_prefs.to_dict()
+        print("\nUser Preferences:", json.dumps(preferences, indent=2))
+
+        # Create OpenAI client
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        # Generate categories and products
+        print("\nGenerating catalog with OpenAI...")
+        completion = client.chat.completions.create(
+            model="gpt-4-0125-preview",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a retail categorization expert. Generate a valid JSON catalog of grocery categories and products."
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+                    Create a grocery store catalog for a user with these preferences:
+                    - Cuisine Preferences: {preferences.get('cuisinePreferences', [])}
+                    - Dietary Preferences: {preferences.get('dietaryPreferences', [])}
+                    - Food Allergies: {preferences.get('foodAllergies', [])}
+                    - Location: {preferences.get('location', 'Unknown')}
+
+                    Return ONLY a JSON object with this exact structure:
+                    {{
+                        "categories": [
+                            {{
+                                "id": "cat1",
+                                "name": "Category Name",
+                                "subcategories": ["Subcategory 1", "Subcategory 2"]
+                            }}
+                        ],
+                        "products": [
+                            {{
+                                "id": "prod1",
+                                "name": "Product Name",
+                                "price": 9.99,
+                                "description": "Product description",
+                                "category": "Category Name",
+                                "subcategory": "Subcategory 1"
+                            }}
+                        ]
+                    }}
+
+                    Requirements:
+                    1. Generate at least 7 main categories (e.g., Produce, Dairy, Bakery)
+                    2. Each category should have 3-5 subcategories
+                    3. Generate 3-5 products per subcategory
+                    4. Ensure all products respect dietary restrictions
+                    5. Use realistic prices (e.g., $1.99, $4.99)
+                    6. Include detailed but concise descriptions
+                    7. Ensure all IDs are unique strings
+                    8. Return only the JSON object, no additional text
+                    """
+                }
+            ],
+            max_tokens=4000,
+            temperature=0.7
+        )
+
+        # Get and clean the response
+        response = completion.choices[0].message.content.strip()
+        print("\nReceived response from OpenAI")
+        print("Response length:", len(response))
+
+        try:
+            # Clean the response
+            if '```json' in response:
+                response = response.split('```json')[-1].split('```')[0].strip()
+            
+            print("\nAttempting to parse JSON...")
+            catalog_data = json.loads(response)
+            
+            # Validate the structure
+            if not isinstance(catalog_data, dict):
+                raise ValueError("Response is not a dictionary")
+            if 'categories' not in catalog_data or 'products' not in catalog_data:
+                raise ValueError("Missing required fields: categories or products")
+            
+            print(f"\nValidated {len(catalog_data['categories'])} categories")
+            print(f"Validated {len(catalog_data['products'])} products")
+
+            # Generate images for categories
+            print("\nGenerating images for categories...")
+            for category in catalog_data['categories']:
+                try:
+                    image_result = await search_image(
+                        ImageSearchRequest(query=f"{category['name']} grocery category")
+                    )
+                    category['image'] = image_result.get('imageUrl')
+                    print(f"Added image for category: {category['name']}")
+                except Exception as img_error:
+                    print(f"Error getting image for category {category['name']}: {str(img_error)}")
+                    category['image'] = None
+
+            # Generate images for products
+            print("\nGenerating images for products...")
+            for product in catalog_data['products']:
+                try:
+                    image_result = await search_image(
+                        ImageSearchRequest(query=f"{product['name']} food product")
+                    )
+                    product['image'] = image_result.get('imageUrl')
+                    print(f"Added image for product: {product['name']}")
+                except Exception as img_error:
+                    print(f"Error getting image for product {product['name']}: {str(img_error)}")
+                    product['image'] = None
+
+            # Store in Firebase
+            print("\nStoring catalog in Firebase...")
+            catalog_ref = user_ref.collection('catalog')
+            
+            # Store categories
+            categories_doc = catalog_ref.document('categories')
+            categories_doc.set({"items": catalog_data['categories']})
+            print("Stored categories in Firebase")
+            
+            # Store products
+            products_doc = catalog_ref.document('products')
+            products_doc.set({"items": catalog_data['products']})
+            print("Stored products in Firebase")
+
+            print("\n=== Category Generation Complete ===")
+            return {
+                "message": "Catalog generated successfully",
+                "categories": catalog_data['categories'],
+                "products": catalog_data['products']
+            }
+
+        except json.JSONDecodeError as e:
+            print(f"\nJSON Parse Error: {str(e)}")
+            print("Raw response:", response)
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to parse catalog data: {str(e)}"
+            )
+        except ValueError as e:
+            print(f"\nValidation Error: {str(e)}")
+            print("Parsed data:", catalog_data)
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Invalid catalog data: {str(e)}"
+            )
+
+    except Exception as e:
+        print(f"\n=== Error generating catalog ===")
+        print(f"Type: {type(e)}")
+        print(f"Details: {str(e)}")
+        if hasattr(e, '__traceback__'):
+            import traceback
+            traceback.print_tb(e.__traceback__)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Add endpoint to retrieve catalog
+@app.get("/api/categories/{uid}")
+async def get_categories(uid: str):
+    """Retrieve user's categorized product catalog"""
+    try:
+        catalog_ref = db_firebase.collection('users').document(uid).collection('catalog')
+        
+        # Get categories
+        categories_doc = catalog_ref.document('categories').get()
+        products_doc = catalog_ref.document('products').get()
+        
+        if not categories_doc.exists or not products_doc.exists:
+            raise HTTPException(status_code=404, detail="Catalog not found")
+            
+        return {
+            "categories": categories_doc.to_dict()['items'],
+            "products": products_doc.to_dict()['items']
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch catalog: {str(e)}")
 
 # Add this after creating the FastAPI app
 app.mount("/static", StaticFiles(directory="app/static"), name="static")

@@ -55,7 +55,8 @@ Content-Type: application/json
 }
 ###
 # POST http://localhost:8002/api/generate-menu
-POST https://ff5c-73-162-153-137.ngrok-free.app/api/generate-menu
+# POST https://ff5c-73-162-153-137.ngrok-free.app/api/generate-menu
+POST http://localhost:8002/api/generate-menu
 Content-Type: application/json
 
 {
@@ -77,3 +78,16 @@ GET http://localhost:8002/debug/firebase-users
 Accept: application/json
 ###
 GET http://localhost:8002/generate-shopping-list/gskCM4FzLfd2f6QDm1XRhipIsLg2
+### Generate categories for user
+POST http://localhost:8002/api/generate-categories/gskCM4FzLfd2f6QDm1XRhipIsLg2
+Accept: application/json
+###
+GET http://localhost:8002/api/categories/gskCM4FzLfd2f6QDm1XRhipIsLg2
+Accept: application/json
+### Generate menu items
+POST http://localhost:8002/api/generate-menu/gskCM4FzLfd2f6QDm1XRhipIsLg2
+Accept: application/json
+
+### Get menu items
+GET http://localhost:8002/api/menu-items/gskCM4FzLfd2f6QDm1XRhpIsLg2
+Accept: application/json
