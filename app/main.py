@@ -964,7 +964,7 @@ async def search_image(request: ImageSearchRequest):
 # Update the generate_menu endpoint
 @app.post("/api/generate-menu/{uid}")
 async def generate_menu(uid: str):
-    """Generate a menu based on user preferences"""
+    """Generate menu items based on user preferences from Firebase"""
     try:
         print(f"\n=== Starting Menu Generation for User {uid} ===")
 
@@ -980,54 +980,55 @@ async def generate_menu(uid: str):
 
         # Create OpenAI client
         client = OpenAI(api_key=OPENAI_API_KEY)
+        print("\nCreating recipes with OpenAI...")
 
-        # Generate menu items
-        print("\nGenerating menu with OpenAI...")
+        # Generate recipes
         completion = client.chat.completions.create(
             model="gpt-4-0125-preview",
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a culinary expert. Generate a valid JSON menu of dishes."
+                    "content": "You are a professional chef creating unique recipes based on user preferences. Return only valid JSON arrays. Include realistic pricing for each recipe based on ingredient costs and complexity."
                 },
                 {
                     "role": "user",
                     "content": f"""
-                    Create a menu for a user with these preferences:
+                    Create 10 unique recipes for a user with these preferences:
                     - Cuisine Preferences: {preferences.get('cuisinePreferences', [])}
                     - Dietary Preferences: {preferences.get('dietaryPreferences', [])}
                     - Food Allergies: {preferences.get('foodAllergies', [])}
                     - Location: {preferences.get('location', 'Unknown')}
 
-                    Return ONLY a JSON object with this exact structure:
-                    {{
-                        "menuItems": [
-                            {{
-                                "id": "1",
-                                "name": "Dish Name",
-                                "description": "Dish description",
-                                "image": "Image URL",
-                                "ingredients": [
-                                    {{"id": "1", "name": "Ingredient Name"}}
-                                ],
-                                "dietaryInfo": {{
-                                    "isVegetarian": false,
-                                    "isVegan": false,
-                                    "isGlutenFree": false,
-                                    "isDairyFree": false
-                                }},
-                                "rating": 4.5
-                            }}
-                        ]
-                    }}
+                    Return ONLY a JSON array with this exact structure:
+                    [
+                        {{
+                            "name": "Recipe Name",
+                            "description": "Brief but appealing description",
+                            "ingredients": [
+                                {{"id": "1", "name": "Ingredient Name", "quantity": "amount", "price": price_in_dollars}}
+                            ],
+                            "dietaryInfo": {{
+                                "isVegetarian": boolean,
+                                "isVegan": boolean,
+                                "isGlutenFree": boolean,
+                                "isDairyFree": boolean
+                            }},
+                            "totalPrice": total_cost_in_dollars,
+                            "priceCategory": "budget"|"moderate"|"premium"
+                        }}
+                    ]
 
                     Requirements:
-                    1. Generate at least 10 menu items
-                    2. Each item should have 5 ingredients
-                    3. Ensure all items respect dietary restrictions
-                    4. Use realistic descriptions and ratings
-                    5. Ensure all IDs are unique strings
-                    6. Return only the JSON object, no additional text
+                    1. Generate exactly 10 unique recipes
+                    2. Each recipe must be different
+                    3. Respect all dietary restrictions and allergies
+                    4. Match preferred cuisines when possible
+                    5. Include precise quantities
+                    6. Include realistic prices for each ingredient (e.g., $1.99, $3.50)
+                    7. Calculate a total price that reflects the sum of all ingredient costs
+                    8. Assign a price category: "budget" (<$15), "moderate" ($15-30), or "premium" (>$30)
+                    9. Ensure all recipes are practical and well-balanced
+                    10. Return only the JSON array, no additional text
                     """
                 }
             ],
@@ -1046,58 +1047,58 @@ async def generate_menu(uid: str):
                 response = response.split('```json')[-1].split('```')[0].strip()
             
             print("\nAttempting to parse JSON...")
-            menu_data = json.loads(response)
+            recipes_data = json.loads(response)
             
-            # Validate the structure
-            if not isinstance(menu_data, dict):
-                raise ValueError("Response is not a dictionary")
-            if 'menuItems' not in menu_data:
-                raise ValueError("Missing required field: menuItems")
+            if not isinstance(recipes_data, list):
+                raise ValueError("Response is not a list of recipes")
             
-            print(f"\nValidated {len(menu_data['menuItems'])} menu items")
+            print(f"\nValidated {len(recipes_data)} recipes")
 
-            # Generate images for menu items
-            print("\nGenerating images for menu items...")
-            for item in menu_data['menuItems']:
+            # Process all recipes
+            menu_items = []
+            for recipe in recipes_data:
                 try:
+                    # Generate image URL
+                    print(f"\nGenerating image for: {recipe['name']}")
                     image_result = await search_image(
-                        ImageSearchRequest(query=f"{item['name']} dish")
+                        ImageSearchRequest(query=f"{recipe['name']} food dish")
                     )
-                    item['image'] = image_result.get('imageUrl')
-                    print(f"Added image for menu item: {item['name']}")
-                except Exception as img_error:
-                    print(f"Error getting image for menu item {item['name']}: {str(img_error)}")
-                    item['image'] = None
+                    
+                    # Create menu item with UUID
+                    recipe_id = str(uuid.uuid4())
+                    menu_item = {
+                        "id": recipe_id,
+                        "name": recipe["name"],
+                        "description": recipe["description"],
+                        "image": image_result.get("imageUrl"),
+                        "ingredients": recipe["ingredients"],
+                        "dietaryInfo": recipe["dietaryInfo"],
+                        "totalPrice": recipe.get("totalPrice", 0.0),
+                        "priceCategory": recipe.get("priceCategory", "moderate"),
+                        "rating": 4.5
+                    }
 
-            # Store in Firebase
-            print("\nStoring menu in Firebase...")
-            menu_ref = user_ref.collection('menu')
-            
-            # Store menu items
-            menu_doc = menu_ref.document('items')
-            menu_doc.set({"items": menu_data['menuItems']})
-            print("Stored menu items in Firebase")
+                    # Store in Firebase
+                    menu_ref = user_ref.collection('menu_items').document(recipe_id)
+                    menu_ref.set(menu_item)
+                    
+                    menu_items.append(menu_item)
+                    print(f"Created menu item: {menu_item['name']} - ${menu_item['totalPrice']:.2f} ({menu_item['priceCategory']})")
 
-            print("\n=== Menu Generation Complete ===")
+                except Exception as e:
+                    print(f"Error processing recipe {recipe.get('name', 'unknown')}: {str(e)}")
+                    continue
+
+            print(f"\n=== Generated {len(menu_items)} menu items successfully ===")
             return {
-                "message": "Menu generated successfully",
-                "menuItems": menu_data['menuItems']
+                "message": f"Generated {len(menu_items)} menu items",
+                "menu_items": menu_items
             }
 
         except json.JSONDecodeError as e:
             print(f"\nJSON Parse Error: {str(e)}")
             print("Raw response:", response)
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Failed to parse menu data: {str(e)}"
-            )
-        except ValueError as e:
-            print(f"\nValidation Error: {str(e)}")
-            print("Parsed data:", menu_data)
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Invalid menu data: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to parse recipe data: {str(e)}")
 
     except Exception as e:
         print(f"\n=== Error generating menu ===")
@@ -1107,27 +1108,6 @@ async def generate_menu(uid: str):
             import traceback
             traceback.print_tb(e.__traceback__)
         raise HTTPException(status_code=500, detail=str(e))
-
-# Add endpoint to retrieve menu
-@app.get("/api/menu/{uid}")
-async def get_menu(uid: str):
-    """Retrieve user's generated menu"""
-    try:
-        menu_ref = db_firebase.collection('users').document(uid).collection('menu').document('items')
-        
-        # Get menu items
-        menu_doc = menu_ref.get()
-        print("\nFetching menu items from Firebase...")
-        print(f"Menu exists: {menu_doc.exists}")
-        if not menu_doc.exists:
-            raise HTTPException(status_code=404, detail="Menu not found")
-            
-        return {
-            "menuItems": menu_doc.to_dict()['items']
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch menu: {str(e)}")
 
 @app.delete("/api/menu-items/{uid}/{item_id}")
 async def delete_menu_item(uid: str, item_id: str):
@@ -1282,7 +1262,7 @@ async def generate_categories(uid: str):
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a retail categorization expert. Generate a valid JSON catalog of grocery categories and products."
+                    "content": "You are a retail categorization expert. Generate a valid JSON catalog of grocery categories and products with detailed pricing information and price tiers."
                 },
                 {
                     "role": "user",
@@ -1299,7 +1279,8 @@ async def generate_categories(uid: str):
                             {{
                                 "id": "cat1",
                                 "name": "Category Name",
-                                "subcategories": ["Subcategory 1", "Subcategory 2"]
+                                "subcategories": ["Subcategory 1", "Subcategory 2"],
+                                "priceRange": {{"min": 1.99, "max": 15.99}}
                             }}
                         ],
                         "products": [
@@ -1307,9 +1288,15 @@ async def generate_categories(uid: str):
                                 "id": "prod1",
                                 "name": "Product Name",
                                 "price": 9.99,
+                                "salePrice": null,
+                                "pricePerUnit": "2.49/lb",
+                                "priceCategory": "value"|"standard"|"premium",
                                 "description": "Product description",
                                 "category": "Category Name",
-                                "subcategory": "Subcategory 1"
+                                "subcategory": "Subcategory 1",
+                                "nutritionalValue": "High in protein, low in fat",
+                                "origin": "Country or region of origin",
+                                "organic": true|false
                             }}
                         ]
                     }}
@@ -1319,10 +1306,14 @@ async def generate_categories(uid: str):
                     2. Each category should have 3-5 subcategories
                     3. Generate 3-5 products per subcategory
                     4. Ensure all products respect dietary restrictions
-                    5. Use realistic prices (e.g., $1.99, $4.99)
-                    6. Include detailed but concise descriptions
-                    7. Ensure all IDs are unique strings
-                    8. Return only the JSON object, no additional text
+                    5. Use realistic prices based on current market values
+                    6. Include price categories ("value", "standard", "premium")
+                    7. Add sale prices to approximately 30% of products
+                    8. Include organic options for relevant categories
+                    9. Add nutritional value highlights
+                    10. Include origin information for products
+                    11. Ensure all IDs are unique strings
+                    12. Return only the JSON object, no additional text
                     """
                 }
             ],
@@ -1373,7 +1364,7 @@ async def generate_categories(uid: str):
                         ImageSearchRequest(query=f"{product['name']} food product")
                     )
                     product['image'] = image_result.get('imageUrl')
-                    print(f"Added image for product: {product['name']}")
+                    print(f"Added image for product: {product['name']} - ${product['price']:.2f} ({product['priceCategory']})")
                 except Exception as img_error:
                     print(f"Error getting image for product {product['name']}: {str(img_error)}")
                     product['image'] = None
@@ -1447,3 +1438,43 @@ async def get_categories(uid: str):
 
 # Add this after creating the FastAPI app
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+@app.get("/api/menu-items/{uid}")
+async def get_menu_items(uid: str):
+    """Retrieve user's generated menu items"""
+    try:
+        print(f"\n=== Retrieving Menu Items for User {uid} ===")
+        
+        user_ref = db_firebase.collection('users').document(uid)
+        menu_items_collection = user_ref.collection('menu_items')
+        
+        # Get all menu items for the user
+        menu_items_docs = menu_items_collection.stream()
+        
+        menu_items = []
+        for doc in menu_items_docs:
+            item_data = doc.to_dict()
+            menu_items.append(item_data)
+        
+        if not menu_items:
+            print(f"No menu items found for user {uid}")
+            return {
+                "message": "No menu items found",
+                "menu_items": []
+            }
+            
+        print(f"Retrieved {len(menu_items)} menu items for user {uid}")
+        
+        return {
+            "message": f"Retrieved {len(menu_items)} menu items",
+            "menu_items": menu_items
+        }
+
+    except Exception as e:
+        print(f"\n=== Error retrieving menu items ===")
+        print(f"Type: {type(e)}")
+        print(f"Details: {str(e)}")
+        if hasattr(e, '__traceback__'):
+            import traceback
+            traceback.print_tb(e.__traceback__)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch menu items: {str(e)}")

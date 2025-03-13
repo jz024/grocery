@@ -79,7 +79,7 @@ Accept: application/json
 ###
 GET http://localhost:8002/generate-shopping-list/gskCM4FzLfd2f6QDm1XRhipIsLg2
 ### Generate categories for user
-POST http://localhost:8002/api/generate-categories/gskCM4FzLfd2f6QDm1XRhipIsLg2
+POST http://localhost:8003/api/generate-categories/gskCM4FzLfd2f6QDm1XRhipIsLg2
 Accept: application/json
 ###
 GET http://localhost:8002/api/categories/gskCM4FzLfd2f6QDm1XRhipIsLg2
@@ -87,10 +87,10 @@ Accept: application/json
 ### Generate menu items
 
 ###
-POST http://localhost:8000/api/generate-menu/gskCM4FzLfd2f6QDm1XRhipIsLg2
+POST http://localhost:8003/api/generate-menu/gskCM4FzLfd2f6QDm1XRhipIsLg2
 Accept: application/json
 ###
 
 ### Get menu items
-GET http://localhost:8003/api/menu/gskCM4FzLfd2f6QDm1XRhipIsLg2
+GET http://localhost:8003/api/menu-items/gskCM4FzLfd2f6QDm1XRhipIsLg2
 Accept: application/json
