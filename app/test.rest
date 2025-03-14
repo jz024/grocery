@@ -87,7 +87,7 @@ Accept: application/json
 ### Generate menu items
 
 ###
-POST http://localhost:8003/api/generate-menu/gskCM4FzLfd2f6QDm1XRhipIsLg2
+POST http://localhost:8000/api/generate-menu/gskCM4FzLfd2f6QDm1XRhipIsLg2
 Accept: application/json
 ###
 

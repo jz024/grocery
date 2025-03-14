@@ -271,7 +271,7 @@ async def chat_with_ai(request: ChatRequest):
         client = OpenAI()
         # Handle streaming response
         completion = client.chat.completions.create(
-            model="gpt-4-0125-preview",
+            model="gpt-4o-mini",
             messages=messages,
             max_tokens=1000,
             temperature=0.7,
@@ -433,7 +433,7 @@ async def generate_shopping_list(uid: str):
         # Generate list using OpenAI
         client = OpenAI()
         completion = client.chat.completions.create(
-            model="gpt-4-0125-preview",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a JSON-generating assistant that creates shopping lists."},
                 {"role": "user", "content": prompt}
@@ -984,7 +984,7 @@ async def generate_menu(uid: str):
 
         # Generate recipes
         completion = client.chat.completions.create(
-            model="gpt-4-0125-preview",
+            model="gpt-4o",
             messages=[
                 {
                     "role": "system",
@@ -1258,7 +1258,7 @@ async def generate_categories(uid: str):
         # Generate categories and products
         print("\nGenerating catalog with OpenAI...")
         completion = client.chat.completions.create(
-            model="gpt-4-0125-preview",
+            model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "system",
