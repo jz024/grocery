@@ -271,7 +271,7 @@ async def chat_with_ai(request: ChatRequest):
         client = OpenAI()
         # Handle streaming response
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-3.5-turbo",
             messages=messages,
             max_tokens=1000,
             temperature=0.7,
@@ -383,7 +383,7 @@ async def generate_shopping_list(uid: str):
 
         # Get user preferences from Firebase
         user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
-        user_doc = user_ref.get()
+        user_doc = user_ref.get()  # This is synchronous
         
         if not user_doc.exists:
             return {"items": [], "error": "User preferences not found"}
@@ -483,9 +483,9 @@ async def generate_shopping_list(uid: str):
             shopping_list["items"] = valid_items
             print("Validated shopping list items")
 
-            # Get store recommendations
+            # Get store recommendations - using synchronous requests
             print("Getting store recommendations...")
-            store_recommendations = await find_stores_for_items(uid, valid_items)
+            store_recommendations = find_stores_for_items_sync(uid, valid_items)
             
             # Create final document for MongoDB
             mongo_doc = {
@@ -515,81 +515,9 @@ async def generate_shopping_list(uid: str):
 
     except Exception as e:
         print(f"Shopping list generation error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {"items": []}
-
-async def find_stores_for_items(uid: str, items: list) -> dict:
-    """Helper function to find stores where items can be purchased"""
-    try:
-        # Get user location
-        user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
-        user_doc = user_ref.get()
-        
-        if not user_doc.exists or not user_doc.to_dict().get("location"):
-            return {}
-
-        location = user_doc.to_dict()["location"]
-        items_text = ", ".join([item["name"] for item in items])
-        
-        # Construct query for stores
-        search_query = f"""
-        Find stores in {location} that sell these items: {items_text}
-        
-        Return the answer in this exact JSON format:
-        {{
-            "stores": [
-                {{
-                    "name": "Store name",
-                    "address": "Full store address with city and zip code",
-                    "available_items": ["item1", "item2"]
-                }}
-            ]
-        }}
-        """
-
-        # Make Perplexity API call
-        url = "https://api.perplexity.ai/chat/completions"
-        payload = {
-            "model": "sonar",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a store finder that returns only JSON data."
-                },
-                {
-                    "role": "user",
-                    "content": search_query
-                }
-            ]
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {os.getenv('PERPLEXITY_API_KEY')}",
-            "Content-Type": "application/json"
-        }
-
-        # Use httpx for async HTTP requests
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, headers=headers)
-            
-            if response.status_code != 200:
-                return {}
-
-            response_data = response.json()
-            store_data = response_data["choices"][0]["message"]["content"]
-            
-            # Clean and parse store data
-            store_data = store_data.replace('```json\n', '').replace('\n```', '').strip()
-            
-            try:
-                return json.loads(store_data)
-            except json.JSONDecodeError:
-                return {}
-
-        return {}
-
-    except Exception as e:
-        print(f"Error finding stores: {str(e)}")
-        return {}
 
 @app.get("/test-store-search/{uid}")
 async def test_store_search(uid: str):
@@ -1478,3 +1406,149 @@ async def get_menu_items(uid: str):
             import traceback
             traceback.print_tb(e.__traceback__)
         raise HTTPException(status_code=500, detail=f"Failed to fetch menu items: {str(e)}")
+
+def find_stores_for_items_sync(uid: str, items: list) -> dict:
+    """Synchronous helper function to find stores where items can be purchased"""
+    try:
+        # Get user location
+        user_ref = db_firebase.collection('users').document(uid).collection('AllAboutUser').document('preferences')
+        user_doc = user_ref.get()
+        
+        if not user_doc.exists or not user_doc.to_dict().get("location"):
+            print("No location found in user preferences")
+            return {}
+
+        location = user_doc.to_dict()["location"]
+        items_text = ", ".join([item["name"] for item in items])
+        
+        print(f"Finding stores in {location} for items: {items_text}")
+        
+        # Construct query for stores
+        search_query = f"""
+        Find stores in {location} that sell these items: {items_text}
+        
+        Return the answer in this exact JSON format:
+        {{
+            "stores": [
+                {{
+                    "name": "Store name",
+                    "address": "Full store address with city and zip code",
+                    "available_items": ["item1", "item2"]
+                }}
+            ]
+        }}
+        Requirements:
+        1. Only include real stores that actually exist at this location: {location}
+        2. Include complete store addresses with zip codes
+        3. Group items by store where they're most likely to be found
+        4. Only include major grocery stores and specialty stores that definitely exist at this location
+        5. Very important: Only return valid JSON data with no additional notes or explanations
+        """
+
+        # Make Perplexity API call
+        url = "https://api.perplexity.ai/chat/completions"
+        payload = {
+            "model": "sonar",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a store finder that returns only JSON data about stores and their available items. ONLY return valid JSON with no additional text, notes or explanations."
+                },
+                {
+                    "role": "user",
+                    "content": search_query
+                }
+            ]
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {os.getenv('PERPLEXITY_API_KEY')}",
+            "Content-Type": "application/json"
+        }
+
+        print("Making Perplexity API call...")
+        response = requests.post(url, json=payload, headers=headers)
+        print(f"Perplexity API response status: {response.status_code}")
+        
+        if not response.ok:
+            print(f"Perplexity API error: {response.text}")
+            return {}
+
+        response_data = response.json()
+        store_data = response_data["choices"][0]["message"]["content"]
+        
+        # Clean up the response - remove markdown code blocks if present
+        store_data = store_data.replace('```json\n', '').replace('\n```', '').strip()
+        print("Cleaned store data response")
+        
+        # Handle the case where there might be additional text after the JSON
+        try:
+            # Try to find where the JSON ends by looking for the closing brace of the main JSON object
+            json_end_pos = store_data.rindex('}')
+            potential_json = store_data[:json_end_pos+1]
+            
+            # Test if this is valid JSON
+            try:
+                store_data_json = json.loads(potential_json)
+                print(f"Successfully parsed store data with {len(store_data_json.get('stores', []))} stores")
+                return store_data_json
+            except json.JSONDecodeError:
+                # If not, we'll try a more aggressive approach
+                pass
+                
+            # Look for JSON pattern - this is a more aggressive approach
+            import re
+            json_pattern = r'\{\s*"stores"\s*:\s*\[.*?\]\s*\}'
+            json_match = re.search(json_pattern, store_data, re.DOTALL)
+            
+            if json_match:
+                extracted_json = json_match.group(0)
+                store_data_json = json.loads(extracted_json)
+                print(f"Extracted and parsed store data with {len(store_data_json.get('stores', []))} stores")
+                return store_data_json
+                
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"Error processing JSON with extraction methods: {e}")
+        
+        # If we're still here, try to find the first valid JSON object
+        print("Attempting to find valid JSON in the response...")
+        import re
+        
+        # Try to find a valid JSON object starting with { and ending with }
+        json_matches = re.findall(r'(\{[^{]*"stores"[^}]*\})', store_data, re.DOTALL)
+        
+        for potential_match in json_matches:
+            try:
+                cleaned_json = potential_match.strip()
+                # Make sure it's properly balanced with braces
+                if cleaned_json.count('{') == cleaned_json.count('}'):
+                    store_data_json = json.loads(cleaned_json)
+                    print(f"Successfully found and parsed valid JSON with {len(store_data_json.get('stores', []))} stores")
+                    return store_data_json
+            except json.JSONDecodeError:
+                continue
+                
+        # Last resort - try to manually extract the stores array
+        try:
+            # Look for the stores array pattern
+            stores_pattern = r'"stores"\s*:\s*(\[.*?\])'
+            stores_match = re.search(stores_pattern, store_data, re.DOTALL)
+            
+            if stores_match:
+                stores_json = stores_match.group(1)
+                stores_data = json.loads(stores_json)
+                print(f"Extracted only the stores array with {len(stores_data)} stores")
+                return {"stores": stores_data}
+        except Exception as e:
+            print(f"Failed to extract stores array: {e}")
+        
+        # If all else fails
+        print(f"Failed to parse store data after multiple attempts")
+        print(f"Raw store data: {store_data}")
+        return {}
+
+    except Exception as e:
+        print(f"Error finding stores: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {}
